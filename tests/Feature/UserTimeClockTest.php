@@ -7,9 +7,24 @@ use App\Models\UserTimeClock;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
+
+/**
+ * ⚠️ WARNING: RefreshDatabase is DISABLED
+ * 
+ * This means test data WILL BE STORED in the database and NOT automatically cleaned up.
+ * 
+ * IMPORTANT:
+ * - Make sure you're using a SEPARATE TEST DATABASE (not production!)
+ * - Data will persist after tests run for analysis
+ * - Manually clean up data when done: php artisan migrate:fresh
+ * - Re-run tests will create duplicate/conflicting data
+ * 
+ * To enable automatic cleanup again, uncomment the line below:
+ * use RefreshDatabase;
+ */
 class UserTimeClockTest extends TestCase
 {
-    use RefreshDatabase;
+    // use RefreshDatabase;  // COMMENTED OUT to persist data for analysis
 
     protected User $user;
     protected int $shopId = 1;

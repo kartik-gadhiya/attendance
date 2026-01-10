@@ -52,6 +52,7 @@ class UserTimeClockController extends Controller
             if ($result['status']) {
                 return response()->json([
                     'success' => true,
+                    'code' => $result['code'],
                     'message' => $result['message'],
                     'data' => $result['data'] ?? null,
                 ], $result['code'] ?? 201);
@@ -59,6 +60,7 @@ class UserTimeClockController extends Controller
 
             return response()->json([
                 'success' => false,
+                'code' => $result['code'],
                 'message' => $result['message'],
             ], $result['code'] ?? 422);
         } catch (\Exception $e) {
