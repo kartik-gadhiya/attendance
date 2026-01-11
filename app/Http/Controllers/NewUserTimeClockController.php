@@ -209,18 +209,21 @@ class NewUserTimeClockController extends Controller
             ];
         }
 
-        // First Day In validation - check buffer time
-        if (!$existingEvents['day_in']) {
-            // For next-day times (00:00 to buffer end like 02:00), these are VALID
-            // For same-day times, must be >= buffer start (e.g., 05:00)
+        // CRITICAL: Validate buffer time for ALL Day In events (not just the first)
+        // Valid times are:
+        // 1. Same-day times: buffer_start (e.g., 05:00) to 23:59
+        // 2. Next-day times: 00:00 to buffer_end (e.g., 02:00)
+        // Invalid "dead zone": buffer_end to buffer_start (e.g., 02:01 to 04:59)
+        if (!$isNextDay && $this->isTimeBefore($timeObj, $bufferStartObj)) {
+            // Time is in the "dead zone" - after buffer end but before buffer start
+            return [
+                'valid' => false,
+                'message' => "Cannot clock in before {$bufferData['buffer_start']}. Time {$time} is outside allowed hours.",
+            ];
+        }
 
-            if (!$isNextDay && $this->isTimeBefore($timeObj, $bufferStartObj)) {
-                // Only reject if it's NOT a next-day time AND before buffer start
-                return [
-                    'valid' => false,
-                    'message' => "Cannot clock in before {$bufferData['buffer_start']}",
-                ];
-            }
+        // First Day In validation
+        if (!$existingEvents['day_in']) {
             return ['valid' => true];
         }
 
@@ -303,6 +306,21 @@ class NewUserTimeClockController extends Controller
             ];
         }
 
+        // 5. If there are completed breaks, ensure new Break Start is STRICTLY AFTER last Break End
+        $lastBreakEnd = $existingEvents['break_ends']->last();
+        if ($lastBreakEnd) {
+            $lastBreakEndDateTime = Carbon::parse($lastBreakEnd->formated_date_time);
+            $currentBreakStartDateTime = $dateTimeData['formatted_date_time'];
+
+            // Break Start must be STRICTLY greater than last Break End (not equal)
+            if ($currentBreakStartDateTime->lte($lastBreakEndDateTime)) {
+                return [
+                    'valid' => false,
+                    'message' => 'Break Start must be after last Break End time (' . $lastBreakEndDateTime->format('H:i') . '). Cannot start break at or before ' . $lastBreakEndDateTime->format('H:i'),
+                ];
+            }
+        }
+
         return ['valid' => true];
     }
 
@@ -340,24 +358,18 @@ class NewUserTimeClockController extends Controller
         }
 
         // Check if last break already has an end
-        $breakStartTimeValue = is_string($lastBreakStart->time_at)
-            ? $lastBreakStart->time_at
-            : $lastBreakStart->time_at->format('H:i:s');
-        $breakStartTime = Carbon::createFromFormat('H:i:s', $breakStartTimeValue);
-        $breakEndForThisStart = $existingEvents['break_ends']->filter(function ($breakEnd) use ($breakStartTime) {
-            $breakEndTimeValue = is_string($breakEnd->time_at)
-                ? $breakEnd->time_at
-                : $breakEnd->time_at->format('H:i:s');
-            $breakEndTime = Carbon::createFromFormat('H:i:s', $breakEndTimeValue);
-            return $breakEndTime > $breakStartTime;
-        })->first();
+        // The simpler and more reliable way: compare counts
+        // If counts are equal, all breaks are complete; if break_starts > break_ends, last break is incomplete
+        $breakStartCount = $existingEvents['break_starts']->count();
+        $breakEndCount = $existingEvents['break_ends']->count();
 
-        if ($breakEndForThisStart) {
+        if ($breakStartCount === $breakEndCount) {
             return [
                 'valid' => false,
                 'message' => 'Break already ended. Please start a new break if needed',
             ];
         }
+
 
         // Break End must be after Break Start - use datetime comparison
         $breakStartDateTime = Carbon::parse($lastBreakStart->formated_date_time);
