@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\NewOneUserTimeClockController;
 use App\Http\Controllers\UserTimeClockController;
 use App\Http\Controllers\NewUserTimeClockController;
 use Illuminate\Http\Request;
@@ -28,4 +29,4 @@ Route::prefix('time-clock')->group(function () {
 });
 
 Route::post('/time-clock-new', [NewUserTimeClockController::class, 'store']);
-Route::post('/time-clock-new-one', [NewUserTimeClockController::class, 'store']);
+Route::post('/time-clock-new-one', [NewOneUserTimeClockController::class, 'store']);
