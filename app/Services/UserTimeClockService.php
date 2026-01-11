@@ -81,6 +81,302 @@ class UserTimeClockService
     }
 
     /**
+     * Update an existing time clock entry
+     */
+    public function updateEvent(int $id, array $data): array
+    {
+        // Get the existing event
+        $event = UserTimeClock::find($id);
+        if (!$event) {
+            return [
+                'status' => false,
+                'code' => 404,
+                'message' => __('Event not found.', locale: $this->language),
+            ];
+        }
+
+        // Build complete data array using existing record values as defaults
+        $completeData = [
+            'shop_id' => $event->shop_id,
+            'user_id' => $event->user_id,
+            'clock_date' => Carbon::parse($event->date_at)->format('Y-m-d'),
+            'time' => $data['time'],
+            'type' => $data['type'] ?? $event->type,
+            'shift_start' => $event->shift_start,
+            'shift_end' => $event->shift_end,
+            'buffer_time' => $event->buffer_time / 60, // Convert minutes to hours
+            'comment' => $data['comment'] ?? $event->comment,
+        ];
+
+        // Normalize time format and convert buffer from hours to minutes
+        $completeData = $this->normalizeRequestData($completeData);
+
+        // Get shift times (will use values from the record)
+        $shiftTimes = $this->getShiftTimes($completeData);
+
+        // Check if time is within buffer window
+        if (!$this->isWithinBufferTime($completeData['time'], $shiftTimes['shift_start'], $shiftTimes['shift_end'], $completeData['buffer_time'] ?? 180)) {
+            return [
+                'status' => false,
+                'code' => 422,
+                'message' => __('Time is outside the allowed buffer window.', locale: $this->language),
+            ];
+        }
+
+        // Get neighbor events and validate
+        $neighbors = $this->getNeighborEvents($event, $completeData, $shiftTimes);
+
+        $validation = $this->validateEventEdit($event, $completeData, $neighbors);
+        if (!$validation['status']) {
+            return $validation;
+        }
+
+        // Perform the update
+        return $this->performUpdate($event, $completeData, $shiftTimes);
+    }
+
+    /**
+     * Get previous and next events for the event being edited
+     */
+    protected function getNeighborEvents($currentEvent, array $data, array $shiftTimes): array
+    {
+        // Fetch all events for same date and user, sorted chronologically
+        $allEvents = UserTimeClock::forShop($data['shop_id'])
+            ->forUser($data['user_id'])
+            ->forDate($currentEvent->date_at)
+            ->where('id', '!=', $currentEvent->id) // Exclude current event
+            ->orderBy('formated_date_time', 'asc')
+            ->get();
+
+        // Calculate new formatted_date_time for edited event
+        // Extract just the date portion (Y-m-d) from date_at
+        $dateOnly = Carbon::parse($currentEvent->date_at)->format('Y-m-d');
+
+        $newDateTime = $this->normalizeDateTime(
+            $dateOnly,
+            $data['time'],
+            $shiftTimes['shift_start'],
+            $shiftTimes['shift_end']
+        );
+
+        $newFormattedDateTime = Carbon::parse($newDateTime['formated_date_time']);
+
+        // Check if any other event has the exact same time (duplicate/overlap)
+        $duplicateTime = $allEvents->first(
+            fn($e) =>
+            Carbon::parse($e->formated_date_time)->equalTo($newFormattedDateTime)
+        );
+
+        if ($duplicateTime) {
+            return [
+                'previous' => null,
+                'next' => null,
+                'new_formatted_datetime' => $newFormattedDateTime,
+                'duplicate' => $duplicateTime,
+            ];
+        }
+
+        // Find previous and next events based on new position
+        $previous = $allEvents->filter(
+            fn($e) =>
+            Carbon::parse($e->formated_date_time)->lessThan($newFormattedDateTime)
+        )->last();
+
+        $next = $allEvents->filter(
+            fn($e) =>
+            Carbon::parse($e->formated_date_time)->greaterThan($newFormattedDateTime)
+        )->first();
+
+        return [
+            'previous' => $previous,
+            'next' => $next,
+            'new_formatted_datetime' => $newFormattedDateTime,
+            'duplicate' => null,
+        ];
+    }
+
+    /**
+     * Validate edit against neighbor events
+     */
+    protected function validateEventEdit($event, array $data, array $neighbors): array
+    {
+        // Check for duplicate time (exact match with another event)
+        if ($neighbors['duplicate']) {
+            return [
+                'status' => false,
+                'code' => 422,
+                'message' => sprintf(
+                    __('Time conflicts with existing %s at %s', locale: $this->language),
+                    $neighbors['duplicate']->type,
+                    Carbon::parse($neighbors['duplicate']->time_at)->format('H:i')
+                ),
+            ];
+        }
+
+        // Check against previous event
+        if ($neighbors['previous']) {
+            $prevTime = Carbon::parse($neighbors['previous']->formated_date_time);
+            if ($neighbors['new_formatted_datetime']->lessThanOrEqualTo($prevTime)) {
+                return [
+                    'status' => false,
+                    'code' => 422,
+                    'message' => sprintf(
+                        __('Time must be after previous %s at %s', locale: $this->language),
+                        $neighbors['previous']->type,
+                        $prevTime->format('H:i')
+                    ),
+                ];
+            }
+        }
+
+        // Check against next event
+        if ($neighbors['next']) {
+            $nextTime = Carbon::parse($neighbors['next']->formated_date_time);
+            if ($neighbors['new_formatted_datetime']->greaterThanOrEqualTo($nextTime)) {
+                return [
+                    'status' => false,
+                    'code' => 422,
+                    'message' => sprintf(
+                        __('Time must be before next %s at %s', locale: $this->language),
+                        $neighbors['next']->type,
+                        $nextTime->format('H:i')
+                    ),
+                ];
+            }
+        }
+
+        // Check event type sequence rules
+        $sequenceValidation = $this->validateEventTypeSequence($event, $neighbors);
+        if (!$sequenceValidation['status']) {
+            return $sequenceValidation;
+        }
+
+        return ['status' => true];
+    }
+
+    /**
+     * Validate event type sequence rules
+     */
+    protected function validateEventTypeSequence($event, array $neighbors): array
+    {
+        $eventType = $event->type;
+        $previous = $neighbors['previous'];
+        $next = $neighbors['next'];
+
+        // RULE 1: break_end must have break_start as previous event
+        if ($eventType === 'break_end') {
+            if (!$previous || $previous->type !== 'break_start') {
+                return [
+                    'status' => false,
+                    'code' => 422,
+                    'message' => __('break_end must come immediately after break_start.', locale: $this->language),
+                ];
+            }
+        }
+
+        // RULE 2: break_start - if it currently has a break_end as next event in DB,
+        // the new position must maintain this (can't move break_start after its break_end)
+        if ($eventType === 'break_start') {
+            // Get the current next event from database (before edit)
+            $currentNextEvent = UserTimeClock::forShop($event->shop_id)
+                ->forUser($event->user_id)
+                ->forDate($event->date_at)
+                ->where('formated_date_time', '>', $event->formated_date_time)
+                ->orderBy('formated_date_time', 'asc')
+                ->first();
+
+            // If current next event is a break_end, it's this break's pair
+            if ($currentNextEvent && $currentNextEvent->type === 'break_end') {
+                // After edit, next event must still be this break_end
+                if (!$next || $next->id !== $currentNextEvent->id) {
+                    return [
+                        'status' => false,
+                        'code' => 422,
+                        'message' => __('break_start cannot be moved after its paired break_end. Edit the break_end first if needed.', locale: $this->language),
+                    ];
+                }
+            }
+        }
+
+        // RULE 3: day_in cannot be directly followed by break_end
+        if ($eventType === 'day_in') {
+            if ($next && $next->type === 'break_end') {
+                return [
+                    'status' => false,
+                    'code' => 422,
+                    'message' => __('day_in cannot be directly followed by break_end. A break must start before it ends.', locale: $this->language),
+                ];
+            }
+        }
+
+        // RULE 4: day_out cannot be preceded by break_start (unclosed break)
+        if ($eventType === 'day_out') {
+            if ($previous && $previous->type === 'break_start') {
+                return [
+                    'status' => false,
+                    'code' => 422,
+                    'message' => __('day_out cannot come after an unclosed break_start. The break must be ended first.', locale: $this->language),
+                ];
+            }
+        }
+
+        return ['status' => true];
+    }
+
+    /**
+     * Perform the update operation
+     */
+    protected function performUpdate($event, array $data, array $shiftTimes): array
+    {
+        try {
+            DB::beginTransaction();
+
+            // Normalize datetime for midnight crossing
+            // Extract just the date portion (Y-m-d) from date_at
+            $dateOnly = Carbon::parse($event->date_at)->format('Y-m-d');
+
+            $dateTimes = $this->normalizeDateTime(
+                $dateOnly,
+                $data['time'],
+                $shiftTimes['shift_start'],
+                $shiftTimes['shift_end']
+            );
+
+            // Update the event
+            $event->update([
+                'time_at' => $data['time'],
+                'date_time' => $dateTimes['date_time'],
+                'formated_date_time' => $dateTimes['formated_date_time'],
+                'comment' => $data['comment'] ?? $event->comment,
+                'updated_from' => $data['updated_from'] ?? null,
+            ]);
+
+            DB::commit();
+
+            return [
+                'status' => true,
+                'code' => 200,
+                'message' => __('Event updated successfully.', locale: $this->language),
+                'data' => $event->fresh(),
+            ];
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            Log::error('Failed to update time clock event', [
+                'error' => $e->getMessage(),
+                'event_id' => $event->id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return [
+                'status' => false,
+                'code' => 500,
+                'message' => __('Failed to update event.', locale: $this->language),
+            ];
+        }
+    }
+
+    /**
      * Validate day-in entry
      */
     protected function validateDayIn(array $data): array

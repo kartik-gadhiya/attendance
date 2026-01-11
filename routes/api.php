@@ -3,6 +3,7 @@
 use App\Http\Controllers\NewOneUserTimeClockController;
 use App\Http\Controllers\UserTimeClockController;
 use App\Http\Controllers\NewUserTimeClockController;
+use App\Http\Controllers\UserTimeUpdateClockController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -24,6 +25,7 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 // User Time Clock API Routes
 Route::prefix('time-clock')->group(function () {
     Route::post('/', [UserTimeClockController::class, 'store']);
+    Route::post('/{id}', [UserTimeUpdateClockController::class, 'update']);
     Route::get('/', [UserTimeClockController::class, 'index']);
     // Route::get('/{userTimeClock}', [UserTimeClockController::class, 'show']);
 });
