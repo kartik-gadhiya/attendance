@@ -256,9 +256,7 @@ class NewUserTimeClockController extends Controller
      */
     private function validateBreakStart(string $time, array $existingEvents, array $bufferData, array $dateTimeData): array
     {
-        $timeObj = $dateTimeData['time_obj'];
-
-        // Check for exact duplicate Break Start at same time
+        // 1. Check for exact duplicate Break Start at same time
         $duplicateBreakStart = $existingEvents['all']
             ->where('type', 'break_start')
             ->filter(function ($event) use ($time) {
@@ -274,7 +272,7 @@ class NewUserTimeClockController extends Controller
             ];
         }
 
-        // Must have Day In
+        // 2. Must have Day In
         if (!$existingEvents['day_in']) {
             return [
                 'valid' => false,
@@ -282,79 +280,27 @@ class NewUserTimeClockController extends Controller
             ];
         }
 
-        // Parse time_at as time string (H:i:s)
-        $dayInTimeValue = is_string($existingEvents['day_in']->time_at)
-            ? $existingEvents['day_in']->time_at
-            : $existingEvents['day_in']->time_at->format('H:i:s');
-        $dayInTime = Carbon::createFromFormat('H:i:s', $dayInTimeValue);
-
-        // Break Start must be after Day In
-        if ($this->isTimeBeforeOrEqual($timeObj, $dayInTime)) {
-            return [
-                'valid' => false,
-                'message' => 'Break Start must be after Day In time (' . $dayInTime->format('H:i') . ')',
-            ];
-        }
-
-        // Check if there's a Day Out for the CURRENT shift (after last Day In)
-        // Get the LAST Day In
+        // 3. Break Start must be after LAST Day In (for current shift)
+        // Always get the LAST Day In to support multiple shifts
         $allDayIns = $existingEvents['all']->where('type', 'day_in');
         $lastDayIn = $allDayIns->sortBy('formated_date_time')->last();
         $lastDayInDateTime = Carbon::parse($lastDayIn->formated_date_time);
+        $currentBreakStartDateTime = $dateTimeData['formatted_date_time'];
 
-        $allDayOuts = $existingEvents['all']->where('type', 'day_out');
-        $currentShiftDayOut = null;
-
-        foreach ($allDayOuts as $dayOut) {
-            $dayOutDateTime = Carbon::parse($dayOut->formated_date_time);
-            if ($dayOutDateTime->gt($lastDayInDateTime)) {
-                $currentShiftDayOut = $dayOut;
-                break;
-            }
+        if ($currentBreakStartDateTime->lte($lastDayInDateTime)) {
+            return [
+                'valid' => false,
+                'message' => 'Break Start must be after Day In time (' . $lastDayInDateTime->format('H:i') . ')',
+            ];
         }
 
-        // Only check Day Out constraint if there's a Day Out for current shift
-        if ($currentShiftDayOut) {
-            $currentShiftDayOutDateTime = Carbon::parse($currentShiftDayOut->formated_date_time);
-            $currentBreakDateTime = $dateTimeData['formatted_date_time'];
-
-            if ($currentBreakDateTime->gte($currentShiftDayOutDateTime)) {
-                return [
-                    'valid' => false,
-                    'message' => 'Break Start must be before Day Out time (' . $currentShiftDayOutDateTime->format('H:i') . ')',
-                ];
-            }
-        } else {
-            // If no Day Out, Break Start must not be after buffer end (2:00 AM next day)
-            // Only validate if the time is clearly after midnight and beyond buffer
-            // Times like 10:00 AM should be allowed since buffer end (2:00 AM) wraps to next day
-            $bufferEndObj = $bufferData['buffer_end_obj'];
-
-            // Check if break start time is in the early morning hours (00:00-05:00)
-            // which would be considered next day
-            $isMorningHours = $timeObj->hour >= 0 && $timeObj->hour < 5;
-
-            if ($isMorningHours && $this->isTimeAfter($timeObj, $bufferEndObj)) {
-                return [
-                    'valid' => false,
-                    'message' => 'Break Start must be before ' . $bufferData['buffer_end'],
-                ];
-            }
-        }
-
-        // Check if there's an incomplete break (Break Start without Break End)
+        // 4. Check if there's an incomplete break (Break Start without Break End)
         $incompleteBreak = $this->hasIncompleteBreak($existingEvents);
         if ($incompleteBreak) {
             return [
                 'valid' => false,
                 'message' => 'Please end the current break before starting a new one',
             ];
-        }
-
-        // Check for overlapping breaks
-        $overlapCheck = $this->checkBreakOverlap($timeObj, null, $existingEvents);
-        if (!$overlapCheck['valid']) {
-            return $overlapCheck;
         }
 
         return ['valid' => true];
