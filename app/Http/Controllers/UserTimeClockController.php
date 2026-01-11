@@ -35,20 +35,22 @@ class UserTimeClockController extends Controller
                 $this->service->setLanguage($request->input('language'));
             }
 
-            // Route to specific action based on type
-            $result = match ($validated['type']) {
-                'day_in' => $this->service->dayInAdd($validated),
-                'day_out' => $this->service->dayOutAdd($validated),
-                'break_start' => $this->service->breakStartAdd($validated),
-                'break_end' => $this->service->breakEndAdd($validated),
-                default => [
+            if ($validated['type'] === 'day_in') {
+                $result = $this->service->dayInAdd($validated);
+            } elseif ($validated['type'] === 'day_out') {
+                $result = $this->service->dayOutAdd($validated);
+            } elseif ($validated['type'] === 'break_start') {
+                $result = $this->service->breakStartAdd($validated);
+            } elseif ($validated['type'] === 'break_end') {
+                $result = $this->service->breakEndAdd($validated);
+            } else {
+                $result = [
                     'status' => false,
                     'code' => 422,
                     'message' => 'Invalid entry type',
-                ],
-            };
+                ];
+            }
 
-            // Return response based on result
             if ($result['status']) {
                 return response()->json([
                     'success' => true,
