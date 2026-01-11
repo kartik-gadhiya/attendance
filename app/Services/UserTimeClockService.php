@@ -118,27 +118,8 @@ class UserTimeClockService
         // Get shift times (from request or existing records)
         $shiftTimes = $this->getShiftTimes($data);
 
-        // CRITICAL CHECK: Reject very early morning times for day-in
-        // E.g., shift starts at 08:00, buffer 3hrs, earliest = 05:00
-        // Day-in at 01:59 should be REJECTED (before 05:00)
-        if ($shiftTimes['shift_start']) {
-            $dayInTime = Carbon::createFromFormat('H:i:s', $data['time']);
-            $shiftStart = Carbon::createFromFormat('H:i:s', $shiftTimes['shift_start']);
-            $bufferMinutes = $data['buffer_time'] ?? 180;
-            $earliestAllowed = $shiftStart->copy()->subMinutes($bufferMinutes);
-
-            // If day-in time is very early (before 05:00) and earliest allowed is 05:00 or later
-            // then this is TOO EARLY for a day-in (not a late-shift continuation)
-            if ($dayInTime->hour < 5 && $earliestAllowed->hour >= 5) {
-                return [
-                    'status' => false,
-                    'code' => 422,
-                    'message' => __('Day-in time is outside the allowed buffer window. Earliest allowed: ' . $earliestAllowed->format('H:i'), locale: $this->language),
-                ];
-            }
-        }
-
         // Check if within buffer time
+        // This check handles all buffer validation including midnight-crossing scenarios
         if (!$this->isWithinBufferTime($data['time'], $shiftTimes['shift_start'], $shiftTimes['shift_end'], $data['buffer_time'] ?? 180)) {
             return [
                 'status' => false,
@@ -387,14 +368,17 @@ class UserTimeClockService
             ];
         }
 
-        // Rule 2: Break end must be after break start
+        // Rule 2: Break end must be after break start (handle midnight crossing)
         $breakStartTime = Carbon::createFromFormat(
             'H:i:s',
             $previousEvent->time_at instanceof Carbon ? $previousEvent->time_at->format('H:i:s') : $previousEvent->time_at
         );
         $currentTime = Carbon::createFromFormat('H:i:s', $data['time']);
 
-        if ($currentTime->lessThanOrEqualTo($breakStartTime)) {
+        // Handle midnight crossing: if break end is early AM and break start is late PM
+        if ($currentTime->hour < 6 && $breakStartTime->hour >= 20) {
+            // Break crosses midnight - this is valid, don't compare directly
+        } elseif ($currentTime->lessThanOrEqualTo($breakStartTime)) {
             return [
                 'status' => false,
                 'code' => 422,
@@ -432,6 +416,12 @@ class UserTimeClockService
             ];
         }
 
+        // Check for break overlap
+        $overlapValidation = $this->validateBreakOverlap($data);
+        if (!$overlapValidation['status']) {
+            return $overlapValidation;
+        }
+
         // Check if there's a corresponding break_start without a break_end
         $hasOpenBreak = $this->hasOpenBreak($data);
         if (!$hasOpenBreak) {
@@ -442,7 +432,7 @@ class UserTimeClockService
             ];
         }
 
-        // STATE CHECK: Ensure break-end time is after break-start time
+        // STATE CHECK: Ensure break-end time is after break-start time (handle midnight crossing)
         $lastBreakStart = $this->getLastOpenBreak($data);
         if ($lastBreakStart) {
             $breakEndTime = Carbon::createFromFormat('H:i:s', $data['time']);
@@ -451,7 +441,10 @@ class UserTimeClockService
                 $lastBreakStart->time_at instanceof Carbon ? $lastBreakStart->time_at->format('H:i:s') : $lastBreakStart->time_at
             );
 
-            if ($breakEndTime->lessThanOrEqualTo($breakStartTime)) {
+            // Handle midnight crossing: if break end is early AM and break start is late PM
+            if ($breakEndTime->hour < 6 && $breakStartTime->hour >= 20) {
+                // Break crosses midnight - this is valid, skip the comparison
+            } elseif ($breakEndTime->lessThanOrEqualTo($breakStartTime)) {
                 return [
                     'status' => false,
                     'code' => 422,
@@ -464,9 +457,97 @@ class UserTimeClockService
     }
 
     /**
+     * Validate that a new break does not overlap with existing breaks.
+     */
+    protected function validateBreakOverlap(array $data): array
+    {
+        $events = $this->getTodayEvents($data);
+
+        // Get the current break start (last unclosed break)
+        $lastBreakStart = $this->getLastOpenBreak($data);
+        if (!$lastBreakStart) {
+            return ['status' => true]; // No active break to validate
+        }
+
+        $currentBreakStart = Carbon::createFromFormat(
+            'H:i:s',
+            $lastBreakStart->time_at instanceof Carbon ? $lastBreakStart->time_at->format('H:i:s') : $lastBreakStart->time_at
+        );
+        $currentBreakEnd = Carbon::createFromFormat('H:i:s', $data['time']);
+
+        // Handle midnight crossing for current break
+        // Convert to minutes from start of day for easier comparison
+        $currentStartMinutes = $currentBreakStart->hour * 60 + $currentBreakStart->minute;
+        $currentEndMinutes = $currentBreakEnd->hour * 60 + $currentBreakEnd->minute;
+
+        // If break end is early morning and break start is late evening, it crosses midnight
+        if ($currentBreakEnd->hour < 6 && $currentBreakStart->hour >= 20) {
+            // Add 24 hours (1440 minutes) to the end time for comparison
+            $currentEndMinutes += 1440;
+        }
+
+        // Get all completed breaks
+        $completedBreaks = [];
+        $tempStart = null;
+
+        foreach ($events as $event) {
+            if ($event->type === 'break_start' && $event->id !== $lastBreakStart->id) {
+                $tempStart = $event;
+            } elseif ($event->type === 'break_end' && $tempStart) {
+                $breakStart = Carbon::createFromFormat(
+                    'H:i:s',
+                    $tempStart->time_at instanceof Carbon ? $tempStart->time_at->format('H:i:s') : $tempStart->time_at
+                );
+                $breakEnd = Carbon::createFromFormat(
+                    'H:i:s',
+                    $event->time_at instanceof Carbon ? $event->time_at->format('H:i:s') : $event->time_at
+                );
+
+                $existingStartMinutes = $breakStart->hour * 60 + $breakStart->minute;
+                $existingEndMinutes = $breakEnd->hour * 60 + $breakEnd->minute;
+
+                // Handle midnight crossing for existing break
+                if ($breakEnd->hour < 6 && $breakStart->hour >= 20) {
+                    $existingEndMinutes += 1440;
+                }
+
+                $completedBreaks[] = [
+                    'start' => $breakStart,
+                    'end' => $breakEnd,
+                    'startMinutes' => $existingStartMinutes,
+                    'endMinutes' => $existingEndMinutes,
+                ];
+                $tempStart = null;
+            }
+        }
+
+        // Check for overlaps using minute-based comparison
+        foreach ($completedBreaks as $break) {
+            // Two breaks overlap if: (start1 < end2) AND (end1 > start2)
+            $overlaps = ($currentStartMinutes < $break['endMinutes']) &&
+                ($currentEndMinutes > $break['startMinutes']);
+
+            if ($overlaps) {
+                return [
+                    'status' => false,
+                    'code' => 422,
+                    'message' => sprintf(
+                        __('Break overlaps with existing break (%s - %s).', locale: $this->language),
+                        $break['start']->format('H:i'),
+                        $break['end']->format('H:i')
+                    ),
+                ];
+            }
+        }
+
+        return ['status' => true];
+    }
+
+    /**
      * Normalize request data: convert H:i to H:i:s and hours to minutes
      */
     protected function normalizeRequestData(array $data): array
+
     {
         // Normalize time format (add :00 seconds if not present)
         if (isset($data['time']) && strlen($data['time']) === 5) {
@@ -531,68 +612,29 @@ class UserTimeClockService
         $shiftStartCarbon = Carbon::createFromFormat('H:i:s', $shiftStart);
         $shiftEndCarbon = Carbon::createFromFormat('H:i:s', $shiftEnd);
 
-        // Add buffer time (in minutes)
+        // Calculate allowed window with buffer
         $allowedStart = $shiftStartCarbon->copy()->subMinutes($bufferMinutes);
         $allowedEnd = $shiftEndCarbon->copy()->addMinutes($bufferMinutes);
-
-        // Handle midnight crossing shifts
+        // Handle midnight crossing shifts (e.g., 22:00 to 02:00)
         if ($shiftEndCarbon->lessThan($shiftStartCarbon)) {
-            // Shift crosses midnight (e.g., 22:00 to 02:00)
-            // Event is valid if it's after allowed_start OR before allowed_end
+            // Shift crosses midnight - event is valid if it's after allowed_start OR before allowed_end
             return $eventCarbon->greaterThanOrEqualTo($allowedStart) ||
                 $eventCarbon->lessThanOrEqualTo($allowedEnd);
         }
 
-        // CRITICAL FIX: For day-in, reject very early times that are before buffer window
-        // Shift 08:00-23:00, buffer 3hrs, earliest = 05:00
-        // Time at 01:59 should be REJECTED (before 05:00)
-        // Time at 01:30 for day-out should still be ALLOWED (next-day continuation)
-        if ($eventCarbon->hour < 5 && $allowedStart->hour >= 5) {
-            // Event is very early (before 05:00) but buffer starts later (e.g., 05:00)
-            // This is only valid for late-shift continuation (day-out), not day-in
-            // For now, we'll let the next check handle it, but ensure day-in is blocked
-            // by checking if shift actually extends into next day
-            $shiftEndMinutes = $shiftEndCarbon->hour * 60 + $shiftEndCarbon->minute;
-            $bufferEndMinutes = $shiftEndMinutes + $bufferMinutes - (24 * 60);
+        // Normal shift - check if buffer window crosses midnight
+        // Example: shift 08:00-23:00, buffer 3hrs => allowed 05:00 to 02:00 (next day)
+        if ($allowedEnd->hour < $allowedStart->hour) {
+            // Buffer window crosses midnight - use minutes-based comparison
+            $eventMinutes = $eventCarbon->hour * 60 + $eventCarbon->minute;
+            $startMinutes = $allowedStart->hour * 60 + $allowedStart->minute;
+            $endMinutes = $allowedEnd->hour * 60 + $allowedEnd->minute;
 
-            if ($bufferEndMinutes <= 0) {
-                // Buffer doesn't extend into next day, so early morning time is invalid
-                return false;
-            }
-
-            // Buffer DOES extend into next day - check if event is within that range
-            $minutesAfterMidnight = $eventCarbon->hour * 60 + $eventCarbon->minute;
-            if ($minutesAfterMidnight > $bufferEndMinutes) {
-                // Event is after buffer end (next day)
-                return false;
-            }
-            // Event is within next-day buffer - this is for day-out, should be allowed
-            // But for day-in, we want to block it. We can't distinguish here, so we'll
-            // let it pass and handle it elsewhere... Actually, let's just block very early day-in
-            // For events before 02:00 AND earliest allowed is after 05:00, block it
-            if ($eventCarbon->hour < 2 && $allowedStart->hour > 5) {
-                return false; // Too early for day-in
-            }
-        }
-        // Check if event is early morning (after midnight) and shift ends late at night
-        // This handles cases where shift is 08:00-23:00, buffer extends to 02:00 next day
-        // and event is at 01:00 (which should be valid as it's within buffer after 23:00)
-        if ($eventCarbon->hour <= 4 && $shiftEndCarbon->hour >= 20) {
-            // Event is early morning (00:00-04:59) and shift ends late (20:00 or later)
-            // Treat event as next day - check if it's within buffer after midnight
-            $midnightBuffer = 24 * 60; // Convert to minutes from midnight
-            $minutesAfterMidnight = $eventCarbon->hour * 60 + $eventCarbon->minute;
-            $shiftEndMinutes = $shiftEndCarbon->hour * 60 + $shiftEndCarbon->minute;
-            $bufferEndMinutes = $shiftEndMinutes + $bufferMinutes - $midnightBuffer;
-
-            // If buffer end is positive, it extends into next day
-            if ($bufferEndMinutes > 0 && $minutesAfterMidnight <= $bufferEndMinutes) {
-                return true; // Event is within buffer after midnight
-            }
-            return false; // Event is too late (after buffer end)
+            // Event is valid if it's >= start time (same day) OR <= end time (next day/early morning)
+            return $eventMinutes >= $startMinutes || $eventMinutes <= $endMinutes;
         }
 
-        // Normal shift (within same day)
+        // Buffer window is within same day
         return $eventCarbon->greaterThanOrEqualTo($allowedStart) &&
             $eventCarbon->lessThanOrEqualTo($allowedEnd);
     }
