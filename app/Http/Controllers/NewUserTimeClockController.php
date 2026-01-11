@@ -481,16 +481,21 @@ class NewUserTimeClockController extends Controller
             ];
         }
 
-        // If breaks exist, Day Out must be after last Break End - use full datetime comparison
-        $lastBreakEnd = $existingEvents['break_ends']->last();
-        if ($lastBreakEnd) {
+        // CRITICAL: If breaks exist, Day Out must be STRICTLY AFTER last Break End
+        // Must sort by datetime to get the actual last break end (not just last in collection)
+        if ($existingEvents['break_ends']->isNotEmpty()) {
+            // Sort all break ends by formatted_date_time and get the LAST one
+            $lastBreakEnd = $existingEvents['break_ends']
+                ->sortBy('formated_date_time')
+                ->last();
+
             $breakEndDateTime = Carbon::parse($lastBreakEnd->formated_date_time);
 
-
+            // Day Out must be STRICTLY AFTER last Break End (not equal)
             if ($currentDateTime->lte($breakEndDateTime)) {
                 return [
                     'valid' => false,
-                    'message' => 'Day Out must be after last Break End time (' . $breakEndDateTime->format('H:i') . ')',
+                    'message' => 'Day Out must be after last Break End time (' . $breakEndDateTime->format('H:i') . '). Cannot clock out at or before ' . $breakEndDateTime->format('H:i'),
                 ];
             }
         }
