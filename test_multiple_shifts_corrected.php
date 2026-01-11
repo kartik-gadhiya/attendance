@@ -19,7 +19,7 @@
  */
 
 // Configuration - CORRECTED
-$baseUrl = 'http://127.0.0.1:8000/api/time-clock-new';
+$baseUrl = 'http://127.0.0.1:8000/api/time-clock';
 $userId = 3;
 $shopId = 1;
 $date = '2026-01-01';
