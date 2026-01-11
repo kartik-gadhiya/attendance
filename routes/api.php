@@ -28,3 +28,4 @@ Route::prefix('time-clock')->group(function () {
 });
 
 Route::post('/time-clock-new', [NewUserTimeClockController::class, 'store']);
+Route::post('/time-clock-new-one', [NewUserTimeClockController::class, 'store']);
