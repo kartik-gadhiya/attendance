@@ -104,7 +104,7 @@ class UserTimeClockService
             'type' => $data['type'] ?? $event->type,
             'shift_start' => $event->shift_start,
             'shift_end' => $event->shift_end,
-            'buffer_time' => $event->buffer_time / 60, // Convert minutes to hours
+            'buffer_time' => $event->buffer_time, // Already in hours in the database
             'comment' => $data['comment'] ?? $event->comment,
         ];
 
@@ -307,6 +307,41 @@ class UserTimeClockService
                     'message' => __('day_in cannot be directly followed by break_end. A break must start before it ends.', locale: $this->language),
                 ];
             }
+
+            // RULE 3a: day_in must remain as first event of its shift
+            // Find the corresponding day_out for this day_in
+            $correspondingDayOut = UserTimeClock::forShop($event->shop_id)
+                ->forUser($event->user_id)
+                ->forDate($event->date_at)
+                ->where('type', 'day_out')
+                ->where('formated_date_time', '>', $event->formated_date_time)
+                ->orderBy('formated_date_time', 'asc')
+                ->first();
+
+            if ($correspondingDayOut) {
+                // Get the NEW position time
+                $newPositionTime = $neighbors['new_formatted_datetime'];
+
+                // Get all events between current day_in and its day_out (shift events)
+                $shiftEvents = UserTimeClock::forShop($event->shop_id)
+                    ->forUser($event->user_id)
+                    ->forDate($event->date_at)
+                    ->where('id', '!=', $event->id)
+                    ->where('formated_date_time', '>', $event->formated_date_time)
+                    ->where('formated_date_time', '<', $correspondingDayOut->formated_date_time)
+                    ->get();
+
+                // day_in must come BEFORE all its shift events
+                foreach ($shiftEvents as $shiftEvent) {
+                    if ($newPositionTime->greaterThanOrEqualTo(Carbon::parse($shiftEvent->formated_date_time))) {
+                        return [
+                            'status' => false,
+                            'code' => 422,
+                            'message' => __('day_in must be the first event of its shift and cannot be moved after breaks or other shift events.', locale: $this->language),
+                        ];
+                    }
+                }
+            }
         }
 
         // RULE 4: day_out cannot be preceded by break_start (unclosed break)
@@ -317,6 +352,28 @@ class UserTimeClockService
                     'code' => 422,
                     'message' => __('day_out cannot come after an unclosed break_start. The break must be ended first.', locale: $this->language),
                 ];
+            }
+
+            // RULE 4a: day_out must remain as last event of its shift
+            // Find the corresponding day_in for this day_out
+            $correspondingDayIn = UserTimeClock::forShop($event->shop_id)
+                ->forUser($event->user_id)
+                ->forDate($event->date_at)
+                ->where('type', 'day_in')
+                ->where('formated_date_time', '<', $event->formated_date_time)
+                ->orderBy('formated_date_time', 'desc')
+                ->first();
+
+            if ($correspondingDayIn && $previous) {
+                // day_out must come after its day_in
+                if (Carbon::parse($previous->formated_date_time)->lessThan(Carbon::parse($correspondingDayIn->formated_date_time))) {
+                    // The new position would put day_out before its day_in - not allowed!
+                    return [
+                        'status' => false,
+                        'code' => 422,
+                        'message' => __('day_out must remain after its corresponding day_in and all shift events.', locale: $this->language),
+                    ];
+                }
             }
         }
 
@@ -1335,7 +1392,8 @@ class UserTimeClockService
                 $bufferEndTime = Carbon::createFromFormat('H:i:s', $bufferEnd->format('H:i:s'));
 
                 // Early morning event (00:00 - buffer end time)
-                if ($eventTime->hour < 12 && $eventTime->lessThan($bufferEndTime)) {
+                // Use <= to include the exact buffer end time (e.g., 02:00)
+                if ($eventTime->hour < 12 && $eventTime->lessThanOrEqualTo($bufferEndTime)) {
                     // Check if it's after shift end (in buffer portion, not before shift start)
                     // AND not before shift start (if shift starts early like 02:00 or 05:00)
                     if ($eventTime->greaterThan($shiftEndCarbon) || $eventTime->lessThan($shiftStartCarbon)) {
