@@ -831,36 +831,9 @@ class UserTimeClockService
             return $overlapValidation;
         }
 
-        // Check if there's a corresponding break_start without a break_end
-        $hasOpenBreak = $this->hasOpenBreak($data);
-        if (!$hasOpenBreak) {
-            return [
-                'status' => false,
-                'code' => 422,
-                'message' => __('No active break found to end.', locale: $this->language),
-            ];
-        }
-
-        // STATE CHECK: Ensure break-end time is after break-start time (handle midnight crossing)
-        $lastBreakStart = $this->getLastOpenBreak($data);
-        if ($lastBreakStart) {
-            $breakEndTime = Carbon::createFromFormat('H:i:s', $data['time']);
-            $breakStartTime = Carbon::createFromFormat(
-                'H:i:s',
-                $lastBreakStart->time_at instanceof Carbon ? $lastBreakStart->time_at->format('H:i:s') : $lastBreakStart->time_at
-            );
-
-            // Handle midnight crossing: if break end is early AM and break start is late PM
-            if ($breakEndTime->hour < 6 && $breakStartTime->hour >= 20) {
-                // Break crosses midnight - this is valid, skip the comparison
-            } elseif ($breakEndTime->lessThanOrEqualTo($breakStartTime)) {
-                return [
-                    'status' => false,
-                    'code' => 422,
-                    'message' => __('Break end time must be after break start time.', locale: $this->language),
-                ];
-            }
-        }
+        // Note: No need to check hasOpenBreak() here because we already verified
+        // that the previous event is a break_start (line 752-759).
+        // If getPreviousEvent() returned a break_start, an open break exists.
 
         return ['status' => true];
     }
@@ -1184,27 +1157,23 @@ class UserTimeClockService
 
     /**
      * Get the last open break-start (without a corresponding break-end)
+     * Uses formated_date_time for accurate midnight-crossing detection
      */
     protected function getLastOpenBreak(array $data): ?UserTimeClock
     {
         $events = $this->getTodayEvents($data);
 
-        // Get all break starts
-        $breakStarts = $events->where('type', 'break_start')->sortByDesc('time_at');
+        // Get all break starts sorted in descending order
+        $breakStarts = $events->where('type', 'break_start')->sortByDesc('formated_date_time');
 
         foreach ($breakStarts as $breakStart) {
-            // Check if this break has a corresponding end
+            // Check if this break has a corresponding end using formated_date_time for accuracy
             $hasEnd = $events->where('type', 'break_end')
                 ->filter(function ($breakEnd) use ($breakStart) {
-                    $startTime = Carbon::createFromFormat(
-                        'H:i:s',
-                        $breakStart->time_at instanceof Carbon ? $breakStart->time_at->format('H:i:s') : $breakStart->time_at
-                    );
-                    $endTime = Carbon::createFromFormat(
-                        'H:i:s',
-                        $breakEnd->time_at instanceof Carbon ? $breakEnd->time_at->format('H:i:s') : $breakEnd->time_at
-                    );
-                    return $endTime->greaterThan($startTime);
+                    // Use formated_date_time which includes date, handles midnight crossing correctly
+                    $startDateTime = Carbon::parse($breakStart->formated_date_time);
+                    $endDateTime = Carbon::parse($breakEnd->formated_date_time);
+                    return $endDateTime->greaterThan($startDateTime);
                 })
                 ->isNotEmpty();
 

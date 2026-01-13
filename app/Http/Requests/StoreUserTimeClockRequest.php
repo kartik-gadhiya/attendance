@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Rules\TimeFormatRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
@@ -27,9 +28,9 @@ class StoreUserTimeClockRequest extends FormRequest
             'shop_id' => ['required', 'integer'],
             'user_id' => ['nullable', 'integer'],
             'clock_date' => ['required', 'date'],
-            'time' => ['required', 'date_format:H:i'],
-            'shift_start' => ['nullable', 'date_format:H:i'],
-            'shift_end' => ['nullable', 'date_format:H:i'],
+            'time' => ['required', new TimeFormatRule()],
+            'shift_start' => ['nullable', new TimeFormatRule()],
+            'shift_end' => ['nullable', new TimeFormatRule()],
             'type' => ['required', 'string', 'max:255', 'in:day_in,day_out,break_start,break_end'],
             'comment' => ['nullable', 'string'],
             'buffer_time' => ['nullable', 'integer', 'min:1', 'max:24'],
