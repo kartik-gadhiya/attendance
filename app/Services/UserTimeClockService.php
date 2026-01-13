@@ -3,12 +3,14 @@
 namespace App\Services;
 
 use App\Models\UserTimeClock;
+use App\Services\v1\CoreService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class UserTimeClockService
 {
+
     protected string $language;
 
     public function __construct(string $language = 'en')
@@ -23,6 +25,7 @@ class UserTimeClockService
     {
         $this->language = $language;
     }
+
 
     /**
      * Add a day-in entry
@@ -104,7 +107,7 @@ class UserTimeClockService
             'type' => $data['type'] ?? $event->type,
             'shift_start' => $event->shift_start,
             'shift_end' => $event->shift_end,
-            'buffer_time' => $event->buffer_time, // Already in hours in the database
+            'buffer_time' => $event->buffer_time, // Convert minutes to hours
             'comment' => $data['comment'] ?? $event->comment,
         ];
 
@@ -196,6 +199,80 @@ class UserTimeClockService
     }
 
     /**
+     * Find the break_end that is paired with this break_start
+     */
+    protected function findPairedBreakEnd($breakStartEvent, array $data): ?UserTimeClock
+    {
+        $allEvents = UserTimeClock::forShop($data['shop_id'])
+            ->forUser($data['user_id'])
+            ->forDate($breakStartEvent->date_at)
+            ->where('id', '!=', $breakStartEvent->id)
+            ->orderBy('formated_date_time', 'asc')
+            ->get();
+
+        $breakStartTime = Carbon::parse($breakStartEvent->formated_date_time);
+        $foundCurrent = false;
+
+        foreach ($allEvents as $e) {
+            if ($e->formated_date_time === $breakStartEvent->formated_date_time) {
+                $foundCurrent = true;
+                continue;
+            }
+            if ($foundCurrent && $e->type === 'break_end') {
+                return $e;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Find the break_start that is paired with this break_end
+     * Handles midnight-crossing breaks and finds the immediate preceding break_start
+     */
+    protected function findPairedBreakStart($breakEndEvent, array $data): ?UserTimeClock
+    {
+        $allEvents = UserTimeClock::forShop($data['shop_id'])
+            ->forUser($data['user_id'])
+            ->forDate($breakEndEvent->date_at)
+            ->where('id', '!=', $breakEndEvent->id)
+            ->orderBy('formated_date_time', 'asc')
+            ->get();
+
+        $breakEndTime = Carbon::parse($breakEndEvent->formated_date_time);
+        $pairedBreakStart = null;
+
+        foreach ($allEvents as $e) {
+            // Once we reach the break_end, stop searching
+            if ($e->id === $breakEndEvent->id || $e->formated_date_time === $breakEndEvent->formated_date_time) {
+                break;
+            }
+
+            if ($e->type === 'break_start') {
+                // Check if this break_start already has a break_end
+                $hasMatchingEnd = $allEvents->first(function ($endEvent) use ($e, $breakEndEvent) {
+                    if ($endEvent->type !== 'break_end' || $endEvent->id === $breakEndEvent->id) {
+                        return false;
+                    }
+
+                    $startTime = Carbon::parse($e->formated_date_time);
+                    $endTime = Carbon::parse($endEvent->formated_date_time);
+
+                    // Check if this break_end comes after this break_start
+                    return $endTime->greaterThan($startTime);
+                });
+
+                // If this break_start doesn't have a paired break_end yet, it's our candidate
+                if (!$hasMatchingEnd) {
+                    $pairedBreakStart = $e;
+                }
+            }
+        }
+
+        return $pairedBreakStart;
+    }
+
+    /**
      * Validate edit against neighbor events
      */
     protected function validateEventEdit($event, array $data, array $neighbors): array
@@ -211,6 +288,42 @@ class UserTimeClockService
                     Carbon::parse($neighbors['duplicate']->time_at)->format('H:i')
                 ),
             ];
+        }
+
+        // Special handling for break_start: ensure it doesn't move on or after its paired break_end
+        if ($event->type === 'break_start') {
+            $pairedBreakEnd = $this->findPairedBreakEnd($event, $data);
+            if ($pairedBreakEnd) {
+                $breakEndTime = Carbon::parse($pairedBreakEnd->formated_date_time);
+                if ($neighbors['new_formatted_datetime']->greaterThanOrEqualTo($breakEndTime)) {
+                    return [
+                        'status' => false,
+                        'code' => 422,
+                        'message' => sprintf(
+                            __('Break start cannot be moved to or after its paired break end at %s', locale: $this->language),
+                            $breakEndTime->format('H:i')
+                        ),
+                    ];
+                }
+            }
+        }
+
+        // Special handling for break_end: ensure it doesn't move on or before its paired break_start
+        if ($event->type === 'break_end') {
+            $pairedBreakStart = $this->findPairedBreakStart($event, $data);
+            if ($pairedBreakStart) {
+                $breakStartTime = Carbon::parse($pairedBreakStart->formated_date_time);
+                if ($neighbors['new_formatted_datetime']->lessThanOrEqualTo($breakStartTime)) {
+                    return [
+                        'status' => false,
+                        'code' => 422,
+                        'message' => sprintf(
+                            __('Break end cannot be moved to or before its paired break start at %s', locale: $this->language),
+                            $breakStartTime->format('H:i')
+                        ),
+                    ];
+                }
+            }
         }
 
         // Check against previous event
@@ -307,41 +420,6 @@ class UserTimeClockService
                     'message' => __('day_in cannot be directly followed by break_end. A break must start before it ends.', locale: $this->language),
                 ];
             }
-
-            // RULE 3a: day_in must remain as first event of its shift
-            // Find the corresponding day_out for this day_in
-            $correspondingDayOut = UserTimeClock::forShop($event->shop_id)
-                ->forUser($event->user_id)
-                ->forDate($event->date_at)
-                ->where('type', 'day_out')
-                ->where('formated_date_time', '>', $event->formated_date_time)
-                ->orderBy('formated_date_time', 'asc')
-                ->first();
-
-            if ($correspondingDayOut) {
-                // Get the NEW position time
-                $newPositionTime = $neighbors['new_formatted_datetime'];
-
-                // Get all events between current day_in and its day_out (shift events)
-                $shiftEvents = UserTimeClock::forShop($event->shop_id)
-                    ->forUser($event->user_id)
-                    ->forDate($event->date_at)
-                    ->where('id', '!=', $event->id)
-                    ->where('formated_date_time', '>', $event->formated_date_time)
-                    ->where('formated_date_time', '<', $correspondingDayOut->formated_date_time)
-                    ->get();
-
-                // day_in must come BEFORE all its shift events
-                foreach ($shiftEvents as $shiftEvent) {
-                    if ($newPositionTime->greaterThanOrEqualTo(Carbon::parse($shiftEvent->formated_date_time))) {
-                        return [
-                            'status' => false,
-                            'code' => 422,
-                            'message' => __('day_in must be the first event of its shift and cannot be moved after breaks or other shift events.', locale: $this->language),
-                        ];
-                    }
-                }
-            }
         }
 
         // RULE 4: day_out cannot be preceded by break_start (unclosed break)
@@ -352,28 +430,6 @@ class UserTimeClockService
                     'code' => 422,
                     'message' => __('day_out cannot come after an unclosed break_start. The break must be ended first.', locale: $this->language),
                 ];
-            }
-
-            // RULE 4a: day_out must remain as last event of its shift
-            // Find the corresponding day_in for this day_out
-            $correspondingDayIn = UserTimeClock::forShop($event->shop_id)
-                ->forUser($event->user_id)
-                ->forDate($event->date_at)
-                ->where('type', 'day_in')
-                ->where('formated_date_time', '<', $event->formated_date_time)
-                ->orderBy('formated_date_time', 'desc')
-                ->first();
-
-            if ($correspondingDayIn && $previous) {
-                // day_out must come after its day_in
-                if (Carbon::parse($previous->formated_date_time)->lessThan(Carbon::parse($correspondingDayIn->formated_date_time))) {
-                    // The new position would put day_out before its day_in - not allowed!
-                    return [
-                        'status' => false,
-                        'code' => 422,
-                        'message' => __('day_out must remain after its corresponding day_in and all shift events.', locale: $this->language),
-                    ];
-                }
             }
         }
 
@@ -405,7 +461,7 @@ class UserTimeClockService
                 'date_time' => $dateTimes['date_time'],
                 'formated_date_time' => $dateTimes['formated_date_time'],
                 'comment' => $data['comment'] ?? $event->comment,
-                'updated_from' => $data['updated_from'] ?? null,
+                'updated_from' => $data['updated_from'] ?? "B",
             ]);
 
             DB::commit();
@@ -788,22 +844,16 @@ class UserTimeClockService
         // STATE CHECK: Ensure break-end time is after break-start time (handle midnight crossing)
         $lastBreakStart = $this->getLastOpenBreak($data);
         if ($lastBreakStart) {
-            // Use formated_date_time for proper comparison (handles midnight crossing)
-            $breakStartFormatted = Carbon::parse($lastBreakStart->formated_date_time);
-
-            // Calculate what the break end formated_date_time would be
-            $shiftTimes = $this->getShiftTimes($data);
-            $breakEndDateTime = $this->normalizeDateTime(
-                $data['clock_date'],
-                $data['time'],
-                $shiftTimes['shift_start'],
-                $shiftTimes['shift_end'],
-                $data['buffer_time'] ?? 180
+            $breakEndTime = Carbon::createFromFormat('H:i:s', $data['time']);
+            $breakStartTime = Carbon::createFromFormat(
+                'H:i:s',
+                $lastBreakStart->time_at instanceof Carbon ? $lastBreakStart->time_at->format('H:i:s') : $lastBreakStart->time_at
             );
-            $breakEndFormatted = Carbon::parse($breakEndDateTime['formated_date_time']);
 
-            // Break end must be after break start (chronologically)
-            if ($breakEndFormatted->lessThanOrEqualTo($breakStartFormatted)) {
+            // Handle midnight crossing: if break end is early AM and break start is late PM
+            if ($breakEndTime->hour < 6 && $breakStartTime->hour >= 20) {
+                // Break crosses midnight - this is valid, skip the comparison
+            } elseif ($breakEndTime->lessThanOrEqualTo($breakStartTime)) {
                 return [
                     'status' => false,
                     'code' => 422,
@@ -828,19 +878,22 @@ class UserTimeClockService
             return ['status' => true]; // No active break to validate
         }
 
-        // Use formated_date_time for proper comparison (handles midnight crossing)
-        $currentBreakStartFormatted = Carbon::parse($lastBreakStart->formated_date_time);
-
-        // Calculate formated_date_time for current break end
-        $shiftTimes = $this->getShiftTimes($data);
-        $currentBreakEndDateTime = $this->normalizeDateTime(
-            $data['clock_date'],
-            $data['time'],
-            $shiftTimes['shift_start'],
-            $shiftTimes['shift_end'],
-            $data['buffer_time'] ?? 180
+        $currentBreakStart = Carbon::createFromFormat(
+            'H:i:s',
+            $lastBreakStart->time_at instanceof Carbon ? $lastBreakStart->time_at->format('H:i:s') : $lastBreakStart->time_at
         );
-        $currentBreakEndFormatted = Carbon::parse($currentBreakEndDateTime['formated_date_time']);
+        $currentBreakEnd = Carbon::createFromFormat('H:i:s', $data['time']);
+
+        // Handle midnight crossing for current break
+        // Convert to minutes from start of day for easier comparison
+        $currentStartMinutes = $currentBreakStart->hour * 60 + $currentBreakStart->minute;
+        $currentEndMinutes = $currentBreakEnd->hour * 60 + $currentBreakEnd->minute;
+
+        // If break end is early morning and break start is late evening, it crosses midnight
+        if ($currentBreakEnd->hour < 6 && $currentBreakStart->hour >= 20) {
+            // Add 24 hours (1440 minutes) to the end time for comparison
+            $currentEndMinutes += 1440;
+        }
 
         // Get all completed breaks
         $completedBreaks = [];
@@ -850,29 +903,48 @@ class UserTimeClockService
             if ($event->type === 'break_start' && $event->id !== $lastBreakStart->id) {
                 $tempStart = $event;
             } elseif ($event->type === 'break_end' && $tempStart) {
-                // Use formated_date_time for break pair
-                $breakStartFormatted = Carbon::parse($tempStart->formated_date_time);
-                $breakEndFormatted = Carbon::parse($event->formated_date_time);
+                $breakStart = Carbon::createFromFormat(
+                    'H:i:s',
+                    $tempStart->time_at instanceof Carbon ? $tempStart->time_at->format('H:i:s') : $tempStart->time_at
+                );
+                $breakEnd = Carbon::createFromFormat(
+                    'H:i:s',
+                    $event->time_at instanceof Carbon ? $event->time_at->format('H:i:s') : $event->time_at
+                );
+
+                $existingStartMinutes = $breakStart->hour * 60 + $breakStart->minute;
+                $existingEndMinutes = $breakEnd->hour * 60 + $breakEnd->minute;
+
+                // Handle midnight crossing for existing break
+                if ($breakEnd->hour < 6 && $breakStart->hour >= 20) {
+                    $existingEndMinutes += 1440;
+                }
 
                 $completedBreaks[] = [
-                    'start' => $breakStartFormatted,
-                    'end' => $breakEndFormatted,
+                    'start' => $breakStart,
+                    'end' => $breakEnd,
+                    'startMinutes' => $existingStartMinutes,
+                    'endMinutes' => $existingEndMinutes,
                 ];
                 $tempStart = null;
             }
         }
 
-        // Check for overlaps using Carbon datetime comparison
+        // Check for overlaps using minute-based comparison
         foreach ($completedBreaks as $break) {
             // Two breaks overlap if: (start1 < end2) AND (end1 > start2)
-            $overlaps = $currentBreakStartFormatted->lessThan($break['end']) &&
-                $currentBreakEndFormatted->greaterThan($break['start']);
+            $overlaps = ($currentStartMinutes < $break['endMinutes']) &&
+                ($currentEndMinutes > $break['startMinutes']);
 
             if ($overlaps) {
                 return [
                     'status' => false,
                     'code' => 422,
-                    'message' => __('Break time overlaps with an existing break.', locale: $this->language),
+                    'message' => sprintf(
+                        __('Break overlaps with existing break (%s - %s).', locale: $this->language),
+                        $break['start']->format('H:i'),
+                        $break['end']->format('H:i')
+                    ),
                 ];
             }
         }
@@ -1346,95 +1418,38 @@ class UserTimeClockService
             ->get();
     }
 
-    /**
-     * Normalize date/time for storage considering midnight crossing
-     */
-    protected function normalizeDateTime(string $date, string $time, string $shiftStart, string $shiftEnd, int $bufferMinutes = 180): array
+    protected function normalizeDateTime(string $date, string $time, ?string $shiftStart, ?string $shiftEnd): array
     {
-        $eventCarbon = Carbon::createFromFormat('Y-m-d H:i:s', "{$date} {$time}");
-        $dateTimeString = $eventCarbon->toDateTimeString();
+        $dateCarbon = Carbon::createFromFormat('Y-m-d', $date);
+        $timeCarbon = Carbon::createFromFormat('H:i:s', $time);
 
-        // Create Carbon instances for shift times (on the event date)
-        $shiftStartCarbon = Carbon::createFromFormat('Y-m-d H:i:s', "{$date} {$shiftStart}");
-        $shiftEndCarbon = Carbon::createFromFormat('Y-m-d H:i:s', "{$date} {$shiftEnd}");
-        $eventTime = Carbon::createFromFormat('H:i:s', $time);
+        $dateTime = $dateCarbon->copy()->setTimeFromTimeString($time);
+        $formattedDateTime = $dateCarbon->copy()->setTimeFromTimeString($time);
 
-        // Determine if this is a midnight-crossing shift
-        $shiftCrossesMidnight = $shiftEndCarbon->lessThan($shiftStartCarbon);
+        // Check if shift crosses midnight and if event time suggests it's the next day
+        if ($shiftStart && $shiftEnd) {
+            $shiftStartCarbon = Carbon::createFromFormat('H:i:s', $shiftStart);
+            $shiftEndCarbon = Carbon::createFromFormat('H:i:s', $shiftEnd);
 
-        if ($shiftCrossesMidnight) {
-            // Shift crosses midnight (e.g., 20:00 - 04:00)
-            // Events before shift start AND <= shift end are part of the "next day" portion
-
-            // Compare just the time portions
-            $shiftStartTime = Carbon::createFromFormat('H:i:s', $shiftStart);
-            $shiftEndTime = Carbon::createFromFormat('H:i:s', $shiftEnd);
-
-            if ($eventTime->lessThan($shiftStartTime) && $eventTime->lessThanOrEqualTo($shiftEndTime)) {
-                return [
-                    'date_time' => $dateTimeString,
-                    'formated_date_time' => $eventCarbon->copy()->addDay()->toDateTimeString(),
-                ];
-            }
-        } else {
-            // Normal shift (e.g., 05:00 - 21:00, 08:00 - 23:00)
-            // Check if event is in the next-day buffer portion (after midnight)
-
-            $bufferEnd = $shiftEndCarbon->copy()->addMinutes($bufferMinutes);
-
-            // If buffer extends past midnight
-            if ($bufferEnd->day !== $shiftEndCarbon->day) {
-                // Event is in next-day buffer if:
-                // 1. Event time is after midnight (early morning)
-                // 2. Event time is before buffer end time
-                // 3. Event time is after shift end (not in shift, but in buffer)
-
-                $bufferEndTime = Carbon::createFromFormat('H:i:s', $bufferEnd->format('H:i:s'));
-
-                // Early morning event (00:00 - buffer end time)
-                // Use <= to include the exact buffer end time (e.g., 02:00)
-                if ($eventTime->hour < 12 && $eventTime->lessThanOrEqualTo($bufferEndTime)) {
-                    // Check if it's after shift end (in buffer portion, not before shift start)
-                    // AND not before shift start (if shift starts early like 02:00 or 05:00)
-                    if ($eventTime->greaterThan($shiftEndCarbon) || $eventTime->lessThan($shiftStartCarbon)) {
-                        // If event is before shift start, only mark as next day if buffer actually crosses midnight
-                        if ($eventTime->lessThan($shiftStartCarbon)) {
-                            // Calculate buffer start
-                            $bufferStart = $shiftStartCarbon->copy()->subMinutes($bufferMinutes);
-
-                            // Only next day if event is NOT in the before-shift buffer on same day
-                            // Event should be next day if it's in early morning but not in pre-shift buffer
-                            if ($bufferStart->day !== $shiftStartCarbon->day) {
-                                // Buffer crosses midnight backwards (e.g., shift 08:00, buffer 3h = starts 05:00)
-                                // Event at 02:00 with shift start 08:00 and buffer start 05:00
-                                // 02:00 < 05:00, AND 02:00 is early morning, so it's from previous day's late buffer
-                                $bufferStartTime = Carbon::createFromFormat('H:i:s', $bufferStart->format('H:i:s'));
-
-                                if ($eventTime->lessThan($bufferStartTime) && $bufferStartTime->hour > 12) {
-                                    // Buffer start is late (like 23:00), event is early (like 02:00)
-                                    // This is next-day territory
-                                    return [
-                                        'date_time' => $dateTimeString,
-                                        'formated_date_time' => $eventCarbon->copy()->addDay()->toDateTimeString(),
-                                    ];
-                                }
-                            }
-                        } else {
-                            // Event is after shift end and in early morning buffer
-                            return [
-                                'date_time' => $dateTimeString,
-                                'formated_date_time' => $eventCarbon->copy()->addDay()->toDateTimeString(),
-                            ];
-                        }
-                    }
+            // If shift crosses midnight (end < start)
+            if ($shiftEndCarbon->lessThan($shiftStartCarbon)) {
+                // If event time is before shift end time (early morning), it's actually the next day
+                if ($timeCarbon->lessThanOrEqualTo($shiftEndCarbon)) {
+                    $formattedDateTime->addDay();
                 }
+            }
+            // Check if event is early morning and shift ends late at night (doesn't cross midnight)
+            // This handles buffer time scenarios: shift 08:00-23:00, event at 01:00 next day
+            elseif ($timeCarbon->hour <= 4 && $shiftEndCarbon->hour >= 20) {
+                // Event is in early morning (00:00-04:59) and shift ends late (after 20:00)
+                // This means the event is actually the next day
+                $formattedDateTime->addDay();
             }
         }
 
-        // Default: same day
         return [
-            'date_time' => $dateTimeString,
-            'formated_date_time' => $dateTimeString,
+            'date_time' => $dateTime->format('Y-m-d H:i:s'),
+            'formated_date_time' => $formattedDateTime->format('Y-m-d H:i:s'),
         ];
     }
 
@@ -1472,7 +1487,7 @@ class UserTimeClockService
                 'shift_end' => $shiftTimes['shift_end'],
                 'type' => $data['type'],
                 'comment' => $data['comment'] ?? null,
-                'buffer_time' => $data['buffer_time'] ?? null,
+                'buffer_time' => $data['buffer_time'] / 60 ?? null,
                 'created_from' => $data['created_from'] ?? null,
                 'updated_from' => $data['created_from'] ?? null,
             ];
@@ -1483,7 +1498,7 @@ class UserTimeClockService
 
             return [
                 'status' => true,
-                'code' => 201,
+                'code' => 200,
                 'message' => __('Time clock entry created successfully.', locale: $this->language),
                 'data' => $timeClock,
             ];
@@ -1495,6 +1510,7 @@ class UserTimeClockService
                 'trace' => $e->getTraceAsString(),
                 'data' => $data,
             ]);
+            throw $e;
 
             return [
                 'status' => false,

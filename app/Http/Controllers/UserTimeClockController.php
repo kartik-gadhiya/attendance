@@ -29,6 +29,10 @@ class UserTimeClockController extends Controller
         try {
             // Get validated data
             $validated = $request->validated();
+            $validated['buffer_time'] = 3;
+            $validated['shift_start'] = "08:00";
+            $validated['shift_end'] = "23:00";
+            $validated['created_from'] = "B";
 
             // Set language if provided in request
             if ($request->has('language')) {
@@ -71,6 +75,7 @@ class UserTimeClockController extends Controller
                 'trace' => $e->getTraceAsString(),
                 'request_data' => $request->all(),
             ]);
+            throw $e;
 
             return response()->json([
                 'success' => false,
