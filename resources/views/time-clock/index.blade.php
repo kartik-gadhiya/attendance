@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>Time Clock Management</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: "Inter", sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 2rem;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 2rem;
+            font-size: 2.5rem;
+            font-weight: 700;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            margin-bottom: 2rem;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 48px rgba(0, 0, 0, 0.15);
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        label {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: #4a5568;
+            font-size: 0.9rem;
+        }
+
+        input,
+        select,
+        textarea {
+            padding: 0.75rem 1rem;
+            border: 2px solid #e2e8f0;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-family: "Inter", sans-serif;
+            transition: all 0.3s ease;
+            background: white;
+        }
+
+        input:focus,
+        select:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .btn {
+            padding: 0.875rem 2rem;
+            border: none;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .btn-secondary {
+            background: #718096;
+            color: white;
+            margin-left: 1rem;
+        }
+
+        .btn-secondary:hover {
+            background: #4a5568;
+            transform: translateY(-2px);
+        }
+
+        .btn-edit {
+            background: #48bb78;
+            color: white;
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
+        }
+
+        .btn-edit:hover {
+            background: #38a169;
+        }
+
+        .button-group {
+            display: flex;
+            align-items: center;
+            margin-top: 1rem;
+        }
+
+        .alert {
+            padding: 1rem 1.5rem;
+            border-radius: 10px;
+            margin-bottom: 1.5rem;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .alert-success {
+            background: #c6f6d5;
+            color: #22543d;
+            border-left: 4px solid #38a169;
+        }
+
+        .alert-error {
+            background: #fed7d7;
+            color: #742a2a;
+            border-left: 4px solid #e53e3e;
+        }
+
+        .table-container {
+            overflow-x: auto;
+            border-radius: 10px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        thead {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        th {
+            padding: 1rem;
+            text-align: left;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.85rem;
+            letter-spacing: 0.5px;
+        }
+
+        th:first-child {
+            border-top-left-radius: 10px;
+        }
+
+        th:last-child {
+            border-top-right-radius: 10px;
+        }
+
+        td {
+            padding: 1rem;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        tbody tr {
+            background: white;
+            transition: background 0.2s ease;
+        }
+
+        tbody tr:hover {
+            background: #f7fafc;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge-day-in {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+
+        .badge-day-out {
+            background: #fbb6ce;
+            color: #702459;
+        }
+
+        .badge-break-start {
+            background: #feebc8;
+            color: #7c2d12;
+        }
+
+        .badge-break-end {
+            background: #bee3f8;
+            color: #1a365d;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #718096;
+        }
+
+        .spinner {
+            border: 3px solid #e2e8f0;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #718096;
+        }
+
+        .empty-state h3 {
+            margin-bottom: 0.5rem;
+            color: #4a5568;
+        }
+
+        .filters-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 1.5rem 2rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            margin-bottom: 2rem;
+        }
+
+        .filters-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            align-items: end;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 1rem;
+            }
+
+            h1 {
+                font-size: 1.8rem;
+            }
+
+            .card {
+                padding: 1.5rem;
+            }
+
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .button-group {
+                flex-direction: column;
+                gap: 0.75rem;
+            }
+
+            .btn-secondary {
+                margin-left: 0;
+            }
+
+            table {
+                font-size: 0.875rem;
+            }
+
+            th,
+            td {
+                padding: 0.75rem 0.5rem;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>⏰ Time Clock Management</h1>
+
+        <!-- Alert Messages -->
+        <div id="alertContainer"></div>
+
+        <!-- Filters Card -->
+        <div class="filters-card">
+            <div class="filters-grid">
+                <div class="filter-group">
+                    <label for="filterUser">Filter by User</label>
+                    <select id="filterUser">
+                        <option value="">All Users</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="filterDate">Filter by Date</label>
+                    <input type="date" id="filterDate" />
+                </div>
+            </div>
+        </div>
+
+        <!-- Form Card -->
+        <div class="card">
+            <h2 id="formTitle" style="margin-bottom: 1.5rem; color: #2d3748">
+                Add New Time Entry
+            </h2>
+            <form id="timeClockForm">
+                <input type="hidden" id="recordId" value="" />
+
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="shopId">Shop ID *</label>
+                        <input type="number" id="shopId" required min="1" value="1" />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="userId">User ID</label>
+                        <input type="number" id="userId" min="1" value="1" />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="clockDate">Date *</label>
+                        <input type="date" id="clockDate" required />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="time">Time *</label>
+                        <input type="text" id="time" required placeholder="HH:MM (e.g., 14:30)" />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="type">Event Type *</label>
+                        <select id="type" required>
+                            <option value="">Select Event Type</option>
+                            <option value="day_in">Day In</option>
+                            <option value="day_out">Day Out</option>
+                            <option value="break_start">Break Start</option>
+                            <option value="break_end">Break End</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="comment">Comment</label>
+                    <textarea id="comment" placeholder="Add any additional notes..."></textarea>
+                </div>
+
+                <div class="button-group">
+                    <button type="submit" class="btn btn-primary" id="submitBtn">
+                        <span id="submitText">Create Entry</span>
+                    </button>
+                    <button type="button" class="btn btn-secondary" id="cancelBtn" style="display: none">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Records Table Card -->
+        <div class="card">
+            <h2 style="margin-bottom: 1.5rem; color: #2d3748">
+                Time Clock Records
+            </h2>
+            <div id="tableContainer">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p style="margin-top: 1rem">Loading records...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // CSRF token setup for AJAX requests
+        const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+
+        // Configuration - Using web routes instead of API routes
+        const BASE_URL = "{{ url('/time-clock') }}";
+        let isEditMode = false;
+        let selectedUserId = null;
+        let selectedDate = null;
+
+        // DOM Elements
+        const form = document.getElementById("timeClockForm");
+        const formTitle = document.getElementById("formTitle");
+        const submitBtn = document.getElementById("submitBtn");
+        const submitText = document.getElementById("submitText");
+        const cancelBtn = document.getElementById("cancelBtn");
+        const alertContainer = document.getElementById("alertContainer");
+        const tableContainer = document.getElementById("tableContainer");
+        const recordIdInput = document.getElementById("recordId");
+
+        // Initialize
+        document.addEventListener("DOMContentLoaded", () => {
+            setTodayDate();
+            setFilterDate();
+            loadUsers();
+            loadRecords();
+            setupFilterHandlers();
+        });
+
+        // Set today's date as default
+        function setTodayDate() {
+            const today = new Date().toISOString().split("T")[0];
+            document.getElementById("clockDate").value = today;
+        }
+
+        // Set filter date to today
+        function setFilterDate() {
+            const today = new Date().toISOString().split("T")[0];
+            document.getElementById("filterDate").value = today;
+            selectedDate = today;
+        }
+
+        // Setup filter change handlers
+        function setupFilterHandlers() {
+            document.getElementById("filterUser").addEventListener("change", (e) => {
+                selectedUserId = e.target.value || null;
+                // Sync form input
+                if (selectedUserId) {
+                    document.getElementById("userId").value = selectedUserId;
+                }
+                loadRecords();
+            });
+
+            document.getElementById("filterDate").addEventListener("change", (e) => {
+                selectedDate = e.target.value || null;
+                // Sync form input
+                if (selectedDate) {
+                    document.getElementById("clockDate").value = selectedDate;
+                }
+                loadRecords();
+            });
+        }
+
+        /**
+         * Set default user and date filters
+         * @param {number|null} userId - The user ID to preselect (null for "All Users")
+         * @param {string|null} date - The date to preselect in YYYY-MM-DD format (null for today)
+         */
+        function setDefaultFilters(userId = 4, date = '2026-01-07') {
+            // Set user filter
+            if (userId !== null) {
+                const userDropdown = document.getElementById("filterUser");
+                userDropdown.value = userId;
+                selectedUserId = userId;
+
+                // Sync with form input
+                document.getElementById("userId").value = userId;
+            }
+
+            // Set date filter
+            if (date !== null) {
+                const dateInput = document.getElementById("filterDate");
+                dateInput.value = date;
+                selectedDate = date;
+
+                // Sync with form input
+                document.getElementById("clockDate").value = date;
+            }
+
+            // Load records with the selected filters
+            loadRecords();
+
+            console.log(`Filters applied - User ID: ${userId || 'All'}, Date: ${date || 'Today'}`);
+        }
+
+
+        // Load users for dropdown
+        async function loadUsers() {
+            try {
+                const response = await fetch(`${BASE_URL}/users`, {
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-CSRF-TOKEN': csrfToken
+                    },
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    const users = result.data || [];
+                    populateUserDropdown(users);
+                }
+            } catch (error) {
+                console.error("Error loading users:", error);
+                // If users API fails, keep default "All Users" option
+            }
+        }
+
+        // Populate user dropdown
+        function populateUserDropdown(users) {
+            const filterUser = document.getElementById("filterUser");
+
+            users.forEach(user => {
+                const option = document.createElement("option");
+                option.value = user.id;
+                option.textContent = `${user.name || 'User'} #${user.id}`;
+                filterUser.appendChild(option);
+            });
+        }
+
+        // Form submission
+        form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+
+            // Validate time format (HH:MM)
+            const timeValue = document.getElementById("time").value;
+            const timePattern = /^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$/;
+
+            if (!timePattern.test(timeValue)) {
+                showAlert("error", "Invalid time format. Please enter time in HH:MM format (e.g., 14:30)");
+                return;
+            }
+
+            const formData = {
+                time: timeValue,
+                type: document.getElementById("type").value,
+                comment: document.getElementById("comment").value || null,
+            };
+
+            // Add create-specific fields if not in edit mode
+            if (!isEditMode) {
+                formData.shop_id = parseInt(
+                    document.getElementById("shopId").value
+                );
+                // Use selected user from filter, or fall back to form input
+                formData.user_id = selectedUserId ?
+                    parseInt(selectedUserId) :
+                    (parseInt(document.getElementById("userId").value) || null);
+                // Use selected date from filter, or fall back to form input
+                formData.clock_date = selectedDate || document.getElementById("clockDate").value;
+            }
+
+            const recordId = recordIdInput.value;
+            const url = isEditMode ?
+                `${BASE_URL}/records/${recordId}` :
+                `${BASE_URL}/records`;
+
+            try {
+                submitBtn.disabled = true;
+                submitText.textContent = isEditMode ?
+                    "Updating..." :
+                    "Creating...";
+
+                const response = await fetch(url, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "X-CSRF-TOKEN": csrfToken
+                    },
+                    body: JSON.stringify(formData),
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    showAlert(
+                        "success",
+                        data.message ||
+                        (isEditMode ?
+                            "Record updated successfully!" :
+                            "Record created successfully!")
+                    );
+                    resetForm();
+                    loadRecords();
+                } else {
+                    // Handle validation errors
+                    if (data.errors) {
+                        const errorMessages = Object.values(data.errors)
+                            .flat()
+                            .join(", ");
+                        showAlert("error", errorMessages);
+                    } else {
+                        showAlert(
+                            "error",
+                            data.message || "An error occurred"
+                        );
+                    }
+                }
+            } catch (error) {
+                console.error("Error:", error);
+                showAlert(
+                    "error",
+                    "Network error. Please check your connection and try again."
+                );
+            } finally {
+                submitBtn.disabled = false;
+                submitText.textContent = isEditMode ?
+                    "Update Entry" :
+                    "Create Entry";
+            }
+        });
+
+        // Cancel edit
+        cancelBtn.addEventListener("click", resetForm);
+
+        // Load records from web route
+        async function loadRecords() {
+            try {
+                // Build query parameters for filtering
+                const params = new URLSearchParams();
+                if (selectedUserId) {
+                    params.append("user_id", selectedUserId);
+                }
+                if (selectedDate) {
+                    params.append("date", selectedDate);
+                }
+
+                const url = params.toString() ?
+                    `${BASE_URL}/records?${params.toString()}` :
+                    `${BASE_URL}/records`;
+
+                const response = await fetch(url, {
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-CSRF-TOKEN': csrfToken
+                    },
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    displayRecords(data.data.data || []);
+                } else {
+                    tableContainer.innerHTML = `
+                        <div class="empty-state">
+                            <h3>Error loading records</h3>
+                            <p>${data.message || "Unable to fetch records"}</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error("Error loading records:", error);
+                tableContainer.innerHTML = `
+                    <div class="empty-state">
+                        <h3>Network Error</h3>
+                        <p>Unable to connect to the server</p>
+                    </div>
+                `;
+            }
+        }
+
+        // Display records in table
+        function displayRecords(records) {
+            if (records.length === 0) {
+                tableContainer.innerHTML = `
+                    <div class="empty-state">
+                        <h3>No Records Found</h3>
+                        <p>Start by creating your first time entry above</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const tableHTML = `
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>User</th>
+                                <th>Date & Time</th>
+                                <th>Event Type</th>
+                                <th>Comment</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${records
+                                .map(
+                                    (record) => `
+                                                                                                                            <tr>
+                                                                                                                                <td>${record.id}</td>
+                                                                                                                                <td>${
+                                                                                                                                    record.user?.name || `User #${record.user_id}`
+                                                                                                                                }</td>
+                                                                                                                                <td>${formatDateTime(record.formated_date_time || record.date_at, record.time_at)}</td>
+                                                                                                                                <td><span class="badge badge-${record.type.replace(
+                                                                                                                                    "_",
+                                                                                                                                    "-"
+                                                                                                                                )}">${formatEventType(
+                                                                                                                                    record.type
+                                                                                                                                )}</span></td>
+                                                                                                                                <td>${record.comment || "-"}</td>
+                                                                                                                                <td>
+                                                                                                                                    <button class="btn btn-edit" onclick="editRecord(${
+                                                                                                                                        record.id
+                                                                                                                                    }, '${
+                                                                                                                                    record.time_at || record.time
+                                                                                                                                }', '${record.type}', '${
+                                                                                                                                    record.comment || ""
+                                                                                                                                }')">
+                                                                                                                                        Edit
+                                                                                                                                    </button>
+                                                                                                                                </td>
+                                                                                                                            </tr>
+                                                                                                                        `
+                                )
+                                .join("")}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+
+            tableContainer.innerHTML = tableHTML;
+        }
+
+        // Edit record
+        function editRecord(id, time, type, comment) {
+            isEditMode = true;
+            recordIdInput.value = id;
+
+            // Update form title and button
+            formTitle.textContent = "Edit Time Entry";
+            submitText.textContent = "Update Entry";
+            cancelBtn.style.display = "inline-block";
+
+            // Disable fields that can't be edited
+            document.getElementById("shopId").disabled = true;
+            document.getElementById("userId").disabled = true;
+            document.getElementById("clockDate").disabled = true;
+
+            // Pre-fill form with existing data
+            document.getElementById("time").value = time;
+            document.getElementById("type").value = type;
+            document.getElementById("comment").value =
+                comment !== "null" ? comment : "";
+
+            // Scroll to form
+            window.scrollTo({
+                top: 0,
+                behavior: "smooth"
+            });
+        }
+
+        // Reset form to create mode
+        function resetForm() {
+            isEditMode = false;
+            recordIdInput.value = "";
+            form.reset();
+            setTodayDate();
+
+            // Update form title and button
+            formTitle.textContent = "Add New Time Entry";
+            submitText.textContent = "Create Entry";
+            cancelBtn.style.display = "none";
+
+            // Re-enable all fields
+            document.getElementById("shopId").disabled = false;
+            document.getElementById("userId").disabled = false;
+            document.getElementById("clockDate").disabled = false;
+
+            // Reset default values
+            document.getElementById("shopId").value = "1";
+            document.getElementById("userId").value = "1";
+        }
+
+        // Show alert message
+        function showAlert(type, message) {
+            const alertClass =
+                type === "success" ? "alert-success" : "alert-error";
+            const alertHTML = `
+                <div class="alert ${alertClass}">
+                    ${message}
+                </div>
+            `;
+
+            alertContainer.innerHTML = alertHTML;
+
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+                alertContainer.innerHTML = "";
+            }, 5000);
+        }
+
+        // Format event type for display
+        function formatEventType(type) {
+            return type
+                .split("_")
+                .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+                .join(" ");
+        }
+
+        // Format datetime for display (DD-MM-YYYY HH:MM)
+        function formatDateTime(datetime, time) {
+            try {
+                if (!datetime) return '-';
+
+                // Handle ISO 8601 format (YYYY-MM-DDTHH:MM:SS.000000Z)
+                // Parse directly without timezone conversion
+                if (datetime.includes('T') && datetime.includes('Z')) {
+                    // Extract date and time parts directly from string
+                    const isoMatch = datetime.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+
+                    if (isoMatch) {
+                        const [, year, month, day, hours, minutes] = isoMatch;
+                        return `${day}-${month}-${year} ${hours}:${minutes}`;
+                    }
+                }
+
+                // If we have formated_date_time in MySQL DATETIME format (YYYY-MM-DD HH:MM:SS)
+                if (datetime && datetime.includes(' ')) {
+                    const parts = datetime.split(' ');
+                    if (parts.length === 2) {
+                        const [datePart, timePart] = parts;
+                        const dateComponents = datePart.split('-');
+
+                        if (dateComponents.length === 3) {
+                            const [year, month, day] = dateComponents;
+                            const timeFormatted = timePart.substring(0, 5); // Get HH:MM
+                            return `${day}-${month}-${year} ${timeFormatted}`;
+                        }
+                    }
+                }
+
+                // Fallback to separate date and time
+                if (datetime && time) {
+                    const dateComponents = datetime.split('-');
+                    if (dateComponents.length === 3) {
+                        const [year, month, day] = dateComponents;
+                        return `${day}-${month}-${year} ${time}`;
+                    }
+                }
+
+                return datetime || '-';
+            } catch (e) {
+                console.error('Error formatting datetime:', e, datetime);
+                return datetime || '-';
+            }
+        }
+
+        // Make functions available globally
+        window.editRecord = editRecord;
+        window.setDefaultFilters = setDefaultFilters;
+    </script>
+</body>
+
+
+</html>

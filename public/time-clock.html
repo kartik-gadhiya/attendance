@@ -295,6 +295,27 @@
                 color: #4a5568;
             }
 
+            .filters-card {
+                background: rgba(255, 255, 255, 0.95);
+                backdrop-filter: blur(10px);
+                border-radius: 20px;
+                padding: 1.5rem 2rem;
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+                margin-bottom: 2rem;
+            }
+
+            .filters-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+                gap: 1.5rem;
+                align-items: end;
+            }
+
+            .filter-group {
+                display: flex;
+                flex-direction: column;
+            }
+
             @media (max-width: 768px) {
                 body {
                     padding: 1rem;
@@ -338,6 +359,22 @@
 
             <!-- Alert Messages -->
             <div id="alertContainer"></div>
+
+            <!-- Filters Card -->
+            <div class="filters-card">
+                <div class="filters-grid">
+                    <div class="filter-group">
+                        <label for="filterUser">Filter by User</label>
+                        <select id="filterUser">
+                            <option value="">All Users</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label for="filterDate">Filter by Date</label>
+                        <input type="date" id="filterDate" />
+                    </div>
+                </div>
+            </div>
 
             <!-- Form Card -->
             <div class="card">
@@ -440,6 +477,8 @@
             // Configuration
             const API_BASE_URL = "/api/time-clock";
             let isEditMode = false;
+            let selectedUserId = null;
+            let selectedDate = null;
 
             // DOM Elements
             const form = document.getElementById("timeClockForm");
@@ -454,13 +493,77 @@
             // Initialize
             document.addEventListener("DOMContentLoaded", () => {
                 setTodayDate();
+                setFilterDate();
+                loadUsers();
                 loadRecords();
+                setupFilterHandlers();
             });
 
             // Set today's date as default
             function setTodayDate() {
                 const today = new Date().toISOString().split("T")[0];
                 document.getElementById("clockDate").value = today;
+            }
+
+            // Set filter date to today
+            function setFilterDate() {
+                const today = new Date().toISOString().split("T")[0];
+                document.getElementById("filterDate").value = today;
+                selectedDate = today;
+            }
+
+            // Setup filter change handlers
+            function setupFilterHandlers() {
+                document.getElementById("filterUser").addEventListener("change", (e) => {
+                    selectedUserId = e.target.value || null;
+                    // Sync form input
+                    if (selectedUserId) {
+                        document.getElementById("userId").value = selectedUserId;
+                    }
+                    loadRecords();
+                });
+
+                document.getElementById("filterDate").addEventListener("change", (e) => {
+                    selectedDate = e.target.value || null;
+                    // Sync form input
+                    if (selectedDate) {
+                        document.getElementById("clockDate").value = selectedDate;
+                    }
+                    loadRecords();
+                });
+            }
+
+            // Load users for dropdown
+            async function loadUsers() {
+                try {
+                    // Assuming there's a users endpoint, adjust if needed
+                    const response = await fetch("/api/users", {
+                        headers: {
+                            Accept: "application/json",
+                        },
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        const users = data.data || data.users || [];
+                        populateUserDropdown(users);
+                    }
+                } catch (error) {
+                    console.error("Error loading users:", error);
+                    // If users API fails, keep default "All Users" option
+                }
+            }
+
+            // Populate user dropdown
+            function populateUserDropdown(users) {
+                const filterUser = document.getElementById("filterUser");
+                
+                users.forEach(user => {
+                    const option = document.createElement("option");
+                    option.value = user.id;
+                    option.textContent = user.name || `User #${user.id}`;
+                    filterUser.appendChild(option);
+                });
             }
 
             // Form submission
@@ -478,11 +581,12 @@
                     formData.shop_id = parseInt(
                         document.getElementById("shopId").value
                     );
-                    formData.user_id =
-                        parseInt(document.getElementById("userId").value) ||
-                        null;
-                    formData.clock_date =
-                        document.getElementById("clockDate").value;
+                    // Use selected user from filter, or fall back to form input
+                    formData.user_id = selectedUserId 
+                        ? parseInt(selectedUserId)
+                        : (parseInt(document.getElementById("userId").value) || null);
+                    // Use selected date from filter, or fall back to form input
+                    formData.clock_date = selectedDate || document.getElementById("clockDate").value;
                 }
 
                 const recordId = recordIdInput.value;
@@ -551,7 +655,20 @@
             // Load records from API
             async function loadRecords() {
                 try {
-                    const response = await fetch(API_BASE_URL, {
+                    // Build query parameters for filtering
+                    const params = new URLSearchParams();
+                    if (selectedUserId) {
+                        params.append("user_id", selectedUserId);
+                    }
+                    if (selectedDate) {
+                        params.append("date", selectedDate);
+                    }
+
+                    const url = params.toString() 
+                        ? `${API_BASE_URL}?${params.toString()}`
+                        : API_BASE_URL;
+
+                    const response = await fetch(url, {
                         headers: {
                             Accept: "application/json",
                         },
