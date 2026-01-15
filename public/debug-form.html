@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Time Clock Form</title>
+    <meta name="csrf-token" content="test">
+    <style>
+        body { font-family: Arial; margin: 20px; }
+        .container { max-width: 800px; }
+        pre { background: #f0f0f0; padding: 15px; border-radius: 5px; overflow-x: auto; }
+        button { padding: 10px 20px; cursor: pointer; }
+        .success { color: green; }
+        .error { color: red; }
+        .debug-output { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Time Clock Form Debugger</h1>
+        
+        <h2>Test Form Submission</h2>
+        <form id="testForm">
+            <div>
+                <label>Shop ID:</label>
+                <input type="number" name="shop_id" value="1" required>
+            </div>
+            <div>
+                <label>User ID:</label>
+                <input type="number" name="user_id" value="1">
+            </div>
+            <div>
+                <label>Date:</label>
+                <input type="date" name="clock_date" required>
+            </div>
+            <div>
+                <label>Time (HH:MM):</label>
+                <input type="text" name="time" placeholder="14:30" required>
+            </div>
+            <div>
+                <label>Type:</label>
+                <select name="type" required>
+                    <option value="">Select...</option>
+                    <option value="day_in">Day In</option>
+                    <option value="day_out">Day Out</option>
+                    <option value="break_start">Break Start</option>
+                    <option value="break_end">Break End</option>
+                </select>
+            </div>
+            <div>
+                <label>Comment:</label>
+                <textarea name="comment"></textarea>
+            </div>
+            <button type="submit">Test Submit</button>
+        </form>
+
+        <h2>Debug Output</h2>
+        <div id="debugOutput" class="debug-output"></div>
+    </div>
+
+    <script>
+        // Set today's date
+        document.querySelector('input[name="clock_date"]').valueAsDate = new Date();
+
+        document.getElementById("testForm").addEventListener("submit", async (e) => {
+            e.preventDefault();
+
+            const formData = new FormData(document.getElementById("testForm"));
+            const data = Object.fromEntries(formData);
+
+            // Convert to proper format
+            const submitData = {
+                shop_id: parseInt(data.shop_id),
+                user_id: data.user_id ? parseInt(data.user_id) : null,
+                clock_date: data.clock_date,
+                time: data.time,
+                type: data.type,
+                comment: data.comment || null
+            };
+
+            const output = document.getElementById("debugOutput");
+            output.innerHTML = "<h3>Form Data Being Sent:</h3><pre>" + JSON.stringify(submitData, null, 2) + "</pre>";
+
+            try {
+                const response = await fetch("http://127.0.0.1:8001/time-clock/records", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]').content
+                    },
+                    body: JSON.stringify(submitData)
+                });
+
+                const responseData = await response.json();
+
+                output.innerHTML += "<h3>Server Response (Status: " + response.status + "):</h3>";
+                output.innerHTML += "<pre>" + JSON.stringify(responseData, null, 2) + "</pre>";
+
+                if (response.status === 422) {
+                    output.innerHTML += "<div class='error'><h3>Validation Errors:</h3><pre>" + JSON.stringify(responseData.errors, null, 2) + "</pre></div>";
+                }
+            } catch (error) {
+                output.innerHTML += "<div class='error'><h3>Network Error:</h3><pre>" + error.message + "</pre></div>";
+            }
+        });
+    </script>
+</body>
+</html>

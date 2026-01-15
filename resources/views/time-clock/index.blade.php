@@ -9,6 +9,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <!-- Toastr CSS for notifications -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/toastr.min.css" />
     <style>
         * {
             margin: 0;
@@ -359,9 +361,6 @@
     <div class="container">
         <h1>⏰ Time Clock Management</h1>
 
-        <!-- Alert Messages -->
-        <div id="alertContainer"></div>
-
         <!-- Filters Card -->
         <div class="filters-card">
             <div class="filters-grid">
@@ -449,7 +448,36 @@
         </div>
     </div>
 
+    <!-- Toastr JS for notifications -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/toastr.min.js"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/toastr.min.js"></script>
+
     <script>
+        // Wait for toastr to be available
+        if (typeof toastr !== 'undefined') {
+            // Configure Toastr options
+            toastr.options = {
+                "closeButton": true,
+                "debug": false,
+                "newestOnTop": true,
+                "progressBar": true,
+                "positionClass": "toast-top-right",
+                "preventDuplicates": false,
+                "onclick": null,
+                "showDuration": 300,
+                "hideDuration": 1000,
+                "timeOut": 5000,
+                "extendedTimeOut": 1000,
+                "showEasing": "swing",
+                "hideEasing": "linear",
+                "showMethod": "fadeIn",
+                "hideMethod": "fadeOut"
+            };
+        } else {
+            console.warn('Toastr library failed to load from CDN');
+        }
+
         // CSRF token setup for AJAX requests
         const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
 
@@ -465,7 +493,6 @@
         const submitBtn = document.getElementById("submitBtn");
         const submitText = document.getElementById("submitText");
         const cancelBtn = document.getElementById("cancelBtn");
-        const alertContainer = document.getElementById("alertContainer");
         const tableContainer = document.getElementById("tableContainer");
         const recordIdInput = document.getElementById("recordId");
 
@@ -621,6 +648,9 @@
                     "Updating..." :
                     "Creating...";
 
+                // Log the data being sent for debugging
+                console.log("Submitting form data:", formData);
+
                 const response = await fetch(url, {
                     method: "POST",
                     headers: {
@@ -644,6 +674,13 @@
                     resetForm();
                     loadRecords();
                 } else {
+                    // Log full response for debugging
+                    console.error("Server response:", {
+                        status: response.status,
+                        statusText: response.statusText,
+                        data: data
+                    });
+
                     // Handle validation errors
                     if (data.errors) {
                         const errorMessages = Object.values(data.errors)
@@ -837,20 +874,29 @@
 
         // Show alert message
         function showAlert(type, message) {
-            const alertClass =
-                type === "success" ? "alert-success" : "alert-error";
-            const alertHTML = `
-                <div class="alert ${alertClass}">
-                    ${message}
-                </div>
-            `;
+            // Ensure message is a string
+            const messageStr = String(message || "");
 
-            alertContainer.innerHTML = alertHTML;
+            // If toastr is available, use it; otherwise use browser alert or console
+            if (typeof toastr !== 'undefined' && toastr) {
+                try {
+                    if (type === "success") {
+                        toastr.success(messageStr, "Success");
+                    } else {
+                        toastr.error(messageStr, "Error");
+                    }
+                    return;
+                } catch (e) {
+                    console.error("Error showing toast:", e);
+                    // Fall through to fallback
+                }
+            }
 
-            // Auto-dismiss after 5 seconds
-            setTimeout(() => {
-                alertContainer.innerHTML = "";
-            }, 5000);
+            // Fallback: Show in browser alert (only for errors to not disrupt success workflow)
+            if (type === "error") {
+                alert("Error: " + messageStr);
+            }
+            console.log(type === "success" ? "Success: " + messageStr : "Error: " + messageStr);
         }
 
         // Format event type for display

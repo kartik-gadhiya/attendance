@@ -765,11 +765,12 @@ class UserTimeClockService
             ];
         }
 
-        // TIMELINE CHECK: Get the last event BEFORE this time
-        $previousEvent = $this->getPreviousEvent($data);
+        // FIX: Get the last OPEN break (not just any previous event)
+        // This ensures we match the break_end with the correct break_start
+        $breakStartEvent = $this->getLastOpenBreak($data);
 
-        // Rule 1: Previous event must be break_start
-        if (!$previousEvent || $previousEvent->type !== 'break_start') {
+        // Rule 1: Must have an open break to end
+        if (!$breakStartEvent) {
             return [
                 'status' => false,
                 'code' => 422,
@@ -780,7 +781,7 @@ class UserTimeClockService
         // Rule 2: Break end must be after break start (handle midnight crossing)
         $breakStartTime = Carbon::createFromFormat(
             'H:i:s',
-            $previousEvent->time_at instanceof Carbon ? $previousEvent->time_at->format('H:i:s') : $previousEvent->time_at
+            $breakStartEvent->time_at instanceof Carbon ? $breakStartEvent->time_at->format('H:i:s') : $breakStartEvent->time_at
         );
         $currentTime = Carbon::createFromFormat('H:i:s', $data['time']);
 
@@ -1161,28 +1162,41 @@ class UserTimeClockService
      */
     protected function getLastOpenBreak(array $data): ?UserTimeClock
     {
-        $events = $this->getTodayEvents($data);
+        $shiftTimes = $this->getShiftTimes($data);
+        $candidateDateTime = $this->normalizeDateTime(
+            $data['clock_date'], $data['time'], $shiftTimes['shift_start'], $shiftTimes['shift_end']
+        )['formated_date_time'];
 
-        // Get all break starts sorted in descending order
-        $breakStarts = $events->where('type', 'break_start')->sortByDesc('formated_date_time');
+        $events = $this->getTodayEvents($data)
+            ->sortBy('formated_date_time');
 
-        foreach ($breakStarts as $breakStart) {
-            // Check if this break has a corresponding end using formated_date_time for accuracy
-            $hasEnd = $events->where('type', 'break_end')
-                ->filter(function ($breakEnd) use ($breakStart) {
-                    // Use formated_date_time which includes date, handles midnight crossing correctly
-                    $startDateTime = Carbon::parse($breakStart->formated_date_time);
-                    $endDateTime = Carbon::parse($breakEnd->formated_date_time);
-                    return $endDateTime->greaterThan($startDateTime);
-                })
-                ->isNotEmpty();
+        // Use a stack to pair break_start with the next break_end in chronological order,
+        // but only consider events up to the candidate (the time we're trying to end).
+        $stack = [];
+        $candidateCarbon = Carbon::parse($candidateDateTime);
 
-            if (!$hasEnd) {
-                return $breakStart; // Found an open break
+        foreach ($events as $event) {
+            $eventCarbon = Carbon::parse($event->formated_date_time);
+
+            // Ignore events that occur after the candidate time
+            if ($eventCarbon->greaterThan($candidateCarbon)) {
+                break;
+            }
+
+            if ($event->type === 'break_start') {
+                $stack[] = $event;
+            } elseif ($event->type === 'break_end') {
+                if (!empty($stack)) {
+                    array_pop($stack);
+                }
             }
         }
 
-        return null; // No open breaks
+        if (!empty($stack)) {
+            return end($stack);
+        }
+
+        return null;
     }
 
     /**
