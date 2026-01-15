@@ -595,6 +595,74 @@
             form.addEventListener("submit", async (e) => {
                 e.preventDefault();
 
+                // Validate time format (HH:MM)
+                const timeValue = document.getElementById("time").value;
+                const timePattern = /^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$/;
+
+                if (!timePattern.test(timeValue)) {
+                    showAlert("error", "Invalid time format. Please enter time in HH:MM format (e.g., 14:30)");
+                    return;
+                }
+
+                // Validate day_in vs day_out times
+                const eventType = document.getElementById("type").value;
+                const currentTime = timeValue;
+
+                // Get the records list to find paired day_in/day_out
+                const tableRows = document.querySelectorAll("tbody tr");
+                
+                if (eventType === "day_out") {
+                    // Find the day_in entry to compare times
+                    let dayInTime = null;
+                    tableRows.forEach(row => {
+                        const typeCell = row.querySelector("td:nth-child(4)")?.textContent?.toLowerCase() || "";
+                        if (typeCell.includes("day in")) {
+                            // Extract time from the datetime format (DD-MM-YYYY HH:MM)
+                            const datetimeCell = row.querySelector("td:nth-child(3)")?.textContent || "";
+                            const timePart = datetimeCell.split(" ").pop();
+                            if (timePart) {
+                                dayInTime = timePart;
+                            }
+                        }
+                    });
+
+                    if (dayInTime) {
+                        // Compare times (both in HH:MM format)
+                        const dayInMinutes = parseInt(dayInTime.split(":")[0]) * 60 + parseInt(dayInTime.split(":")[1]);
+                        const dayOutMinutes = parseInt(currentTime.split(":")[0]) * 60 + parseInt(currentTime.split(":")[1]);
+
+                        if (dayOutMinutes <= dayInMinutes) {
+                            showAlert("error", `Day Out time (${currentTime}) must be after Day In time (${dayInTime})`);
+                            return;
+                        }
+                    }
+                } else if (eventType === "day_in") {
+                    // Find the day_out entry to compare times
+                    let dayOutTime = null;
+                    tableRows.forEach(row => {
+                        const typeCell = row.querySelector("td:nth-child(4)")?.textContent?.toLowerCase() || "";
+                        if (typeCell.includes("day out")) {
+                            // Extract time from the datetime format (DD-MM-YYYY HH:MM)
+                            const datetimeCell = row.querySelector("td:nth-child(3)")?.textContent || "";
+                            const timePart = datetimeCell.split(" ").pop();
+                            if (timePart) {
+                                dayOutTime = timePart;
+                            }
+                        }
+                    });
+
+                    if (dayOutTime) {
+                        // Compare times (both in HH:MM format)
+                        const dayInMinutes = parseInt(currentTime.split(":")[0]) * 60 + parseInt(currentTime.split(":")[1]);
+                        const dayOutMinutes = parseInt(dayOutTime.split(":")[0]) * 60 + parseInt(dayOutTime.split(":")[1]);
+
+                        if (dayInMinutes >= dayOutMinutes) {
+                            showAlert("error", `Day In time (${currentTime}) must be before Day Out time (${dayOutTime})`);
+                            return;
+                        }
+                    }
+                }
+
                 const formData = {
                     time: document.getElementById("time").value,
                     type: document.getElementById("type").value,

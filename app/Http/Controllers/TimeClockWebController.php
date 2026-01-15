@@ -174,18 +174,36 @@ class TimeClockWebController extends Controller
 
             $timeClockEntry = UserTimeClock::findOrFail($id);
 
-            // Update the entry
-            $timeClockEntry->update([
-                'time_at' => $validated['time'],
+            // Build complete data for service validation
+            $completeData = [
+                'shop_id' => $timeClockEntry->shop_id,
+                'user_id' => $timeClockEntry->user_id,
+                'clock_date' => $timeClockEntry->date_at,
+                'time' => $validated['time'],
                 'type' => $validated['type'],
+                'shift_start' => $timeClockEntry->shift_start,
+                'shift_end' => $timeClockEntry->shift_end,
+                'buffer_time' => $timeClockEntry->buffer_time,
                 'comment' => $validated['comment'] ?? null,
-            ]);
+                'updated_from' => 'B',
+            ];
+
+            // Use service to validate and update
+            $service = new \App\Services\UserTimeClockService('en');
+            $result = $service->updateEvent($id, $completeData);
+
+            if ($result['status']) {
+                return response()->json([
+                    'success' => true,
+                    'message' => $result['message'],
+                    'data' => $result['data'],
+                ], $result['code'] ?? 200);
+            }
 
             return response()->json([
-                'success' => true,
-                'message' => 'Record updated successfully',
-                'data' => $timeClockEntry->load('user'),
-            ]);
+                'success' => false,
+                'message' => $result['message'],
+            ], $result['code'] ?? 422);
         } catch (\Exception $e) {
             Log::error('Failed to update time clock entry', [
                 'error' => $e->getMessage(),

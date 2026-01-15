@@ -364,6 +364,12 @@ class UserTimeClockService
             return $sequenceValidation;
         }
 
+        // Check day_in vs day_out time relationship
+        $dayInOutValidation = $this->validateDayInOutTime($event, $data, $neighbors);
+        if (!$dayInOutValidation['status']) {
+            return $dayInOutValidation;
+        }
+
         return ['status' => true];
     }
 
@@ -430,6 +436,77 @@ class UserTimeClockService
                     'code' => 422,
                     'message' => __('day_out cannot come after an unclosed break_start. The break must be ended first.', locale: $this->language),
                 ];
+            }
+        }
+
+        return ['status' => true];
+    }
+
+    /**
+     * Validate day_in vs day_out time relationship
+     * Ensures that day_out time is always greater than day_in time
+     */
+    protected function validateDayInOutTime($event, array $data, array $neighbors): array
+    {
+        $eventType = $event->type;
+        // new_formatted_datetime is already a Carbon object
+        $eventTime = $neighbors['new_formatted_datetime'];
+
+        // If editing a day_out, verify it's after the day_in
+        if ($eventType === 'day_out') {
+            // Find the corresponding day_in for this day_out
+            $dayInEvent = UserTimeClock::forShop($data['shop_id'])
+                ->forUser($data['user_id'])
+                ->forDate($event->date_at)
+                ->where('type', 'day_in')
+                ->where('id', '!=', $event->id)
+                ->orderBy('formated_date_time', 'asc')
+                ->first();
+
+            if ($dayInEvent) {
+                $dayInTime = Carbon::parse($dayInEvent->formated_date_time);
+
+                // day_out must be strictly after day_in
+                if ($eventTime->lessThanOrEqualTo($dayInTime)) {
+                    return [
+                        'status' => false,
+                        'code' => 422,
+                        'message' => sprintf(
+                            __('Day Out time (%s) must be after Day In time (%s)', locale: $this->language),
+                            $eventTime->format('H:i'),
+                            $dayInTime->format('H:i')
+                        ),
+                    ];
+                }
+            }
+        }
+
+        // If editing a day_in, verify it's before the day_out
+        if ($eventType === 'day_in') {
+            // Find the corresponding day_out for this day_in
+            $dayOutEvent = UserTimeClock::forShop($data['shop_id'])
+                ->forUser($data['user_id'])
+                ->forDate($event->date_at)
+                ->where('type', 'day_out')
+                ->where('id', '!=', $event->id)
+                ->orderBy('formated_date_time', 'desc')
+                ->first();
+
+            if ($dayOutEvent) {
+                $dayOutTime = Carbon::parse($dayOutEvent->formated_date_time);
+
+                // day_in must be strictly before day_out
+                if ($eventTime->greaterThanOrEqualTo($dayOutTime)) {
+                    return [
+                        'status' => false,
+                        'code' => 422,
+                        'message' => sprintf(
+                            __('Day In time (%s) must be before Day Out time (%s)', locale: $this->language),
+                            $eventTime->format('H:i'),
+                            $dayOutTime->format('H:i')
+                        ),
+                    ];
+                }
             }
         }
 
@@ -618,6 +695,37 @@ class UserTimeClockService
                 'code' => 422,
                 'message' => __('Cannot perform day-out: You have an open break. Please end the break first.', locale: $this->language),
             ];
+        }
+
+        // TIME CHECK: Ensure day-out is after day-in
+        $dayInEvent = UserTimeClock::forShop($data['shop_id'])
+            ->forUser($data['user_id'])
+            ->forDate($data['clock_date'])
+            ->where('type', 'day_in')
+            ->orderBy('formated_date_time', 'desc')
+            ->first();
+
+        if ($dayInEvent) {
+            $dayInTime = Carbon::parse($dayInEvent->formated_date_time);
+            $dayOutTime = $this->normalizeDateTime(
+                $data['clock_date'],
+                $data['time'],
+                $this->getShiftTimes($data)['shift_start'],
+                $this->getShiftTimes($data)['shift_end']
+            );
+            $dayOutFormattedTime = Carbon::parse($dayOutTime['formated_date_time']);
+
+            if ($dayOutFormattedTime->lessThanOrEqualTo($dayInTime)) {
+                return [
+                    'status' => false,
+                    'code' => 422,
+                    'message' => sprintf(
+                        __('Day Out time (%s) must be after Day In time (%s)', locale: $this->language),
+                        Carbon::parse($data['time'])->format('H:i'),
+                        $dayInTime->format('H:i')
+                    ),
+                ];
+            }
         }
 
         // Get shift times (from request or existing records)
